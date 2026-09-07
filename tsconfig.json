@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    /* Salida: ESM moderno, igual que el "type": "module" del package.json.
+       Con NodeNext los imports relativos llevan extensión .js aunque el
+       archivo fuente sea .ts — es lo que espera Node al ejecutar. */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+
+    "rootDir": "./src",
+    "outDir": "./dist",
+
+    /* Chequeo estricto: sin esto TypeScript casi no aporta nada. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Interop con paquetes CommonJS (express, cors, bcryptjs...). */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+
+    /* Para debuggear con los .ts originales y no con el JS compilado. */
+    "sourceMap": true,
+    "declaration": false,
+
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,11 @@
+node_modules/
+
+# Build de TypeScript
+dist/
+
+# Configuración local con secretos reales
+.env
+.env.local
+
+# Log que deja run.sh
+.run.log
