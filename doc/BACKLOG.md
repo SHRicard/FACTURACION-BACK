@@ -9,18 +9,18 @@ Cada etapa se detalla **cuando llegamos a ella**, no antes.
 
 ## El mapa
 
-El administrador no puede facturar sin tickets, ni cargar tickets sin productos,
-ni tener productos sin catálogo, ni nada de eso sin un cliente. El orden no es
-opcional:
+El administrador no puede facturar sin tickets, ni cargar un ticket sin tener
+al menos una especie, ni nada de eso sin un cliente. El orden no es opcional —
+pero es más corto de lo que era: **el 08/09 se sacó el inventario del medio**.
+No hay que dar de alta productos para poder vender.
 
 ```
 1. CLIENTES        crear, listar, ver, editar, borrar
        ↓
-2. CATÁLOGO        Pantalón, Remera, Zapatilla…
+2. ESPECIES        Pantalón, Pantalón corto, Zapatilla, Media…
        ↓
-3. PRODUCTOS       "Pantalón cargo T14  $14.000  stock 10"
-       ↓
-4. TICKETS         el cliente se lleva mercadería fiada
+3. TICKETS         el cliente se lleva mercadería fiada: el ítem se escribe
+                   ahí mismo (nombre, talle, precio) y se le elige la especie
        ↓
 5. FACTURA         se arma sola con los tickets del período
        ↓
@@ -34,14 +34,13 @@ opcional:
 | # | Etapa | Backend | Documentado | Front |
 | --- | --- | --- | --- | --- |
 | 1 | Clientes | ✅ | ✅ | 🔨 servicio listo, faltan pantallas |
-| 2 | Catálogo | ✅ | ⬜ | ⬜ |
-| 3 | Productos | ✅ | ⬜ | ⬜ |
-| 4 | Tickets | ✅ | ⬜ | ⬜ |
-| 5 | Factura | ✅ | ⬜ | ⬜ |
-| 6 | Cobranza | 🔨 | ⬜ | ⬜ |
-| 7 | Métricas | ⬜ | ⬜ | ⬜ |
+| 2 | Especies | ✅ | ✅ | 🔨 servicio listo, faltan pantallas |
+| 3 | Tickets | ✅ | ✅ CRUD completo | 🔨 |
+| 4 | Factura | ✅ | ✅ lectura | ⬜ |
+| 5 | Cobranza | 🔨 | ⬜ | ⬜ |
+| 6 | Métricas | ⬜ | ⬜ | ⬜ |
 
-> El backend de las etapas 2 a 5 ya está escrito y probado, pero **sin
+> El backend de las etapas 3 a 5 ya está escrito y probado, pero **sin
 > documentar**. Se documenta cuando le toque el turno a cada una, para no
 > escribir guías de cosas que todavía pueden cambiar.
 
@@ -78,42 +77,63 @@ Leyenda: ✅ detallado acá · 📘 documentado en otra guía · ⬜ sin documen
 | ✅ | `GET /clientes/:id` |
 | ✅ | `PUT /clientes/:id` |
 
-### Catálogo — 4 endpoints · Etapa 2
+### Especies — 4 endpoints · Etapa 2
 
 | | Endpoint | Qué hace |
 | --- | --- | --- |
-| ⬜ | `GET /catalogos` | Los tipos: Pantalón, Remera, Zapatilla |
-| ⬜ | `POST /catalogos` | |
-| ⬜ | `PUT /catalogos/:id` | También sirve para desactivar |
-| ⬜ | `DELETE /catalogos/:id` | Rechaza si tiene productos |
+| ✅ | `GET /especies` | Los tipos: Pantalón, Pantalón corto, Zapatilla, Media |
+| ✅ | `POST /especies` | |
+| ✅ | `PUT /especies/:id` | También sirve para desactivar |
+| ✅ | `DELETE /especies/:id` | Rechaza si algún ticket la nombra |
 
-### Productos — 5 endpoints · Etapa 3
+📄 [ESPECIES.md](ESPECIES.md) — la guía de la sección, lista para aplicar.
+
+> Antes se llamaba **catálogo** y vivía en `/catalogos`. Se renombró el 08/09,
+> junto con sacar el inventario del medio. La migración de datos está en
+> [scripts/migrar-especies.mjs](../scripts/migrar-especies.mjs).
+
+### Productos — 5 endpoints · fuera del flujo
+
+**Ya no hacen falta para vender.** El ítem del ticket se escribe a mano, así que
+estos endpoints quedaron como una lista de precios opcional, para prellenar el
+formulario. Su campo `catalogo` pasó a llamarse `especie`.
 
 | | Endpoint | Qué hace |
 | --- | --- | --- |
-| ⬜ | `GET /productos` | Acepta `?catalogo=` para filtrar por tipo |
+| ⬜ | `GET /productos` | Acepta `?especie=` para filtrar por tipo |
 | ⬜ | `GET /productos/:id` | |
-| ⬜ | `POST /productos` | Requiere un catálogo válido del negocio |
+| ⬜ | `POST /productos` | Requiere una especie válida del negocio |
 | ⬜ | `PUT /productos/:id` | |
 | ⬜ | `DELETE /productos/:id` | |
 
-### Tickets y pagos — 3 endpoints · Etapa 4
+- [ ] **Decidir si se borran.** Hoy nadie los usa: el ticket no los mira y el
+      `stock` ya no se descuenta solo. Si el front no los va a ofrecer como
+      lista de precios, se sacan y queda un modelo menos.
+- [ ] `PUT /productos/:id` le pasa `req.body` entero a `findOneAndUpdate`:
+      mandando `administrador` se le puede regalar el producto a otro negocio.
+      Arreglar o borrar la ruta.
+
+### Tickets y pagos — 3 endpoints · Etapa 3
 
 | | Endpoint | Qué hace |
 | --- | --- | --- |
-| ⬜ | `POST /clientes/:id/tickets` | La compra fiada. Acepta `pagado` (lo que deja en el momento) |
+| ✅ | `POST /clientes/:id/tickets` | La compra fiada. Ítems escritos a mano + especie |
+| ✅ | `GET /tickets/:id` | Uno solo |
+| ✅ | `PUT /tickets/:id` | Corregirlo. Reemplaza los renglones completos |
 | ⬜ | `POST /clientes/:id/pagos` | Entrega plata a cuenta. Se imputa a la factura más vieja con saldo |
-| ⬜ | `DELETE /tickets/:id` | Anula y devuelve el stock. Solo si la factura sigue abierta |
+| ✅ | `DELETE /tickets/:id` | **Baja lógica.** Queda tachado y deja de sumar |
+
+📄 [CREATE_TICK.md](CREATE_TICK.md) — el CRUD completo del ticket.
 
 ### Facturas — 6 endpoints · Etapa 5
 
 | | Endpoint | Qué hace |
 | --- | --- | --- |
-| ⬜ | `GET /clientes/:id/factura-actual` | La cuenta abierta, con sus tickets y pagos |
+| ✅ | `GET /clientes/:id/factura-actual` | La cuenta abierta, con sus tickets y pagos |
 | ✅ | `GET /clientes/:id/facturas` | Historial del cliente |
-| ⬜ | `GET /facturas` | Todas las del negocio. Acepta `?estado=` |
-| ⬜ | `GET /facturas/vencidas` | Las que pasaron su fecha y siguen con saldo |
-| ⬜ | `GET /facturas/:id` | Detalle con tickets y pagos |
+| ✅ | `GET /facturas` | Todas las del negocio. Paginado, con `?estado= ?cliente= ?vencidas= ?buscar=` |
+| ✅ | `GET /facturas/vencidas` | Las que pasaron su fecha y siguen con saldo |
+| ✅ | `GET /facturas/:id` | Detalle con tickets, pagos y cliente |
 | ⬜ | `POST /facturas/:id/cerrar` | Cerrarla antes de que venza |
 | ⬜ | `PUT /facturas/:id/pagada` | Marcarla saldada |
 
@@ -130,9 +150,9 @@ administrador, por eso no tiene etapa propia.
 
 Ninguna tiene su schema documentado todavía. Los campos de `Cliente` se pueden
 deducir de la Etapa 1, pero `Factura` (estados, los cinco totales distintos),
-`Ticket`, `Pago`, `Catalogo` y `Producto` no están escritos en ningún lado.
+`Ticket`, `Pago` y `Especie` no están escritos en ningún lado.
 
-- [ ] Documentar los schemas de las 7 colecciones, con qué significa cada campo
+- [ ] Documentar los schemas de las colecciones, con qué significa cada campo
 
 ---
 
@@ -495,7 +515,7 @@ try {
 - [ ] Decidir si cambiar la ventana de pago debe recalcular la factura ya abierta
       (hoy solo afecta a las siguientes)
 
-Cuando cerremos estos, pasamos a la **Etapa 2 — Catálogo**.
+Cuando cerremos estos, pasamos a la **Etapa 2 — Especies**.
 
 ---
 
@@ -503,23 +523,46 @@ Cuando cerremos estos, pasamos a la **Etapa 2 — Catálogo**.
 
 Se detallan al llegar. Por ahora solo el título y qué resuelve cada una.
 
-### Etapa 2 — Catálogo ⬜ documentar
-Los tipos de producto (Pantalón, Remera, Zapatilla). CRUD completo. Es lo que
-después permite saber qué se vende más sin importar talle ni modelo.
+### Etapa 2 — Especies ✅ documentada
+Los tipos de mercadería (Pantalón, Pantalón corto, Zapatilla, Media). CRUD
+completo. Es lo único que se carga antes de vender, y lo que después permite
+saber qué se vende más sin importar cómo se haya escrito cada ítem.
 
-### Etapa 3 — Productos ⬜ documentar
-El artículo concreto con su talle, precio y stock. Cuelga de un catálogo.
+📄 **[ESPECIES.md](ESPECIES.md)** — endpoints, errores, servicio del front y
+checklist de la pantalla. Verificado contra la API el 08/09.
 
-### Etapa 4 — Tickets ⬜ documentar
-La compra fiada. Se pega sola a la factura abierta del cliente. Incluye el pago
-parcial en el momento ("se lleva $5000 y deja $2000").
+Pendientes:
 
-### Etapa 5 — Factura ⬜ documentar
+- [ ] Pantallas del front (listado, alta/edición, borrar-o-desactivar)
+- [ ] Decidir si `GET /especies` debería aceptar `?activo=true` en vez de que
+      el front filtre. Hoy filtra el front
+
+### Etapa 3 — Tickets 🔨
+La compra fiada. El ítem se escribe en el momento — nombre, talle, precio — y se
+le elige la especie. Se pega solo a la factura abierta del cliente. Incluye el
+pago parcial ("se lleva $5000 y deja $2000").
+
+📄 **[CREATE_TICK.md](CREATE_TICK.md)** — el CRUD completo, verificado contra la
+API el 08/09: alta, lectura, edición y anulación por baja lógica, con el
+servicio del front y el diseño de la pantalla.
+
+- [x] ~~Alta~~ · ~~Edición~~ · ~~Anulación (baja lógica)~~ ✅ 08/09
+- [ ] Pantallas del front (el checklist está en CREATE_TICK.md)
+- [ ] Decidir si hace falta "desanular". Hoy no existe: se carga de nuevo
+
+### Etapa 4 — Factura 🔨 lectura documentada
 El resumen del período. Se arma sola. Incluye el ciclo abierta → cerrada →
 pagada y el rollover al vencer.
 
-### Etapa 6 — Cobranza 🔨
+📄 **[FACTURAS.md](FACTURAS.md)** — la vista de facturación (listado + detalle),
+verificada contra la API el 08/09.
+
+Falta documentar las acciones, que son la etapa de cobranza:
+`POST /clientes/:id/pagos`, `POST /facturas/:id/cerrar`,
+`PUT /facturas/:id/pagada` y `DELETE /tickets/:id`.
+
+### Etapa 5 — Cobranza 🔨
 Pagos a cuenta, listado de vencidas, avisos por WhatsApp o mail.
 
-### Etapa 7 — Métricas ⬜
+### Etapa 6 — Métricas ⬜
 Qué se vende más, quién debe más, cuánto se fía por mes.
