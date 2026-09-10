@@ -1,9 +1,10 @@
 import { Router } from "express";
-import Factura from "../models/Factura.js";
-import Ticket from "../models/Ticket.js";
+import mongoose from "mongoose";
+import Factura, { type FacturaDocument } from "../models/Factura.js";
+import Ticket, { type TicketDocument } from "../models/Ticket.js";
 import Pago from "../models/Pago.js";
-import Cliente from "../models/Cliente.js";
-import Producto from "../models/Producto.js";
+import Cliente, { type ClienteDocument } from "../models/Cliente.js";
+import Especie from "../models/Especie.js";
 import { requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { datosInvalidos, noEncontrado } from "../utils/AppError.js";
@@ -26,6 +27,151 @@ async function clientePropio(clienteId: string | undefined, administradorId: unk
   const cliente = await Cliente.findOne({ _id: clienteId, administrador: administradorId });
   if (!cliente) throw noEncontrado("Cliente");
   return cliente;
+}
+
+/** Un renglón tal como lo manda el front. Nada de esto se guarda sin validar. */
+interface ItemEntrada {
+  nombre?: string;
+  talle?: string;
+  especie?: string;
+  cantidad?: number | string;
+  precioUnitario?: number | string;
+}
+
+/**
+ * Las especies que nombra el ticket, en una sola consulta y ya filtradas por
+ * negocio: así una especie de otro administrador no entra ni por error.
+ *
+ * Los ids mal formados se descartan acá en vez de dejarlos llegar al $in, que
+ * respondería un CastError genérico en lugar de decir qué renglón falla.
+ */
+async function especiesDelTicket(items: ItemEntrada[], administradorId: unknown) {
+  const ids = [
+    ...new Set(
+      items
+        .map((item) => String(item?.especie ?? ""))
+        .filter((id) => mongoose.isValidObjectId(id))
+    ),
+  ];
+
+  const especies = await Especie.find({ _id: { $in: ids }, administrador: administradorId });
+  return new Map(especies.map((especie) => [String(especie._id), especie]));
+}
+
+/**
+ * Valida los renglones y los deja listos para guardar, con su total.
+ *
+ * La usan el alta y la edición: si la validación viviera en cada handler,
+ * editar un ticket podría terminar aceptando algo que el alta rechaza.
+ *
+ * No toca la base: o devuelve todo bien, o tira. Por eso un ticket con un
+ * renglón inválido no deja nada a medias.
+ */
+async function construirItems(items: ItemEntrada[] | undefined, administradorId: unknown) {
+  if (!items?.length) throw datosInvalidos("El ticket necesita al menos un ítem");
+
+  // Las especies se traen todas juntas: son pocas y así no se hace una
+  // consulta por renglón del ticket.
+  const especies = await especiesDelTicket(items, administradorId);
+
+  const itemsCalculados = [];
+  let total = 0;
+
+  for (const [indice, item] of items.entries()) {
+    // El renglón se nombra por su posición: el front todavía no tiene un
+    // nombre válido que mostrar cuando justamente falta el nombre.
+    const renglon = `El ítem ${indice + 1}`;
+
+    const nombre = String(item?.nombre ?? "").trim();
+    if (!nombre) throw datosInvalidos(`${renglon} necesita un nombre`);
+
+    const especie = especies.get(String(item?.especie ?? ""));
+    if (!especie) throw datosInvalidos(`${renglon} necesita una especie de tu lista`);
+
+    const cantidad = Number(item?.cantidad ?? 1);
+    if (!Number.isInteger(cantidad) || cantidad < 1) {
+      throw datosInvalidos(`Cantidad inválida en "${nombre}"`);
+    }
+
+    const precioUnitario = Number(item?.precioUnitario);
+    if (!Number.isFinite(precioUnitario) || precioUnitario < 0) {
+      throw datosInvalidos(`Precio inválido en "${nombre}"`);
+    }
+
+    const subtotal = precioUnitario * cantidad;
+    total += subtotal;
+
+    // Nombre, talle, precio y especie quedan congelados en el ticket: es lo
+    // que se llevó ese día, al precio de ese día.
+    itemsCalculados.push({
+      nombre,
+      talle: item?.talle ? String(item.talle).trim() : undefined,
+      especie: especie._id,
+      especieNombre: especie.nombre,
+      cantidad,
+      precioUnitario,
+      subtotal,
+    });
+  }
+
+  return { items: itemsCalculados, total };
+}
+
+/**
+ * Aviso de límite de crédito. Avisa, no bloquea: la mercadería ya salió del
+ * local y la decisión es del dueño. Mismo criterio que el resto del sistema.
+ */
+function avisoDeLimite(cliente: ClienteDocument, factura: FacturaDocument): string | null {
+  if (cliente.limiteCredito <= 0 || factura.saldo <= cliente.limiteCredito) return null;
+
+  const aviso = `${cliente.nombre} superó su límite de $${cliente.limiteCredito}`;
+  logger.warn(aviso);
+  return aviso;
+}
+
+/** Lo que deja en el momento. Sin esto, se fía todo. */
+function leerPagado(crudo: unknown, total: number): number {
+  const pagado = Number(crudo ?? 0);
+  if (!Number.isFinite(pagado) || pagado < 0) {
+    throw datosInvalidos("El monto pagado no puede ser negativo");
+  }
+  if (pagado > total) {
+    throw datosInvalidos("Pagó más de lo que suma el ticket", { totalTicket: total, pagado });
+  }
+  return pagado;
+}
+
+/**
+ * Un ticket del administrador logueado, o 404.
+ *
+ * Los anulados siguen siendo visibles —el historial no se esconde—, pero no se
+ * pueden volver a tocar: eso lo chequea cada handler.
+ */
+async function ticketPropio(ticketId: string | undefined, administradorId: unknown) {
+  const ticket = await Ticket.findOne({ _id: ticketId, administrador: administradorId });
+  if (!ticket) throw noEncontrado("Ticket");
+  return ticket;
+}
+
+/**
+ * Un ticket solo se puede editar o anular mientras su factura sigue abierta.
+ *
+ * Una vez cerrada ya tiene número y el cliente vio ese resumen: cambiarle los
+ * renglones por atrás reescribiría algo que ya se comunicó.
+ */
+async function exigirFacturaAbierta(ticket: TicketDocument) {
+  if (ticket.anulado) {
+    throw datosInvalidos("El ticket ya está anulado");
+  }
+
+  const factura = await Factura.findById(ticket.factura);
+  if (factura && factura.estado !== "abierta") {
+    throw datosInvalidos(
+      `No se puede modificar un ticket de una factura ${factura.estado}`,
+      { estadoFactura: factura.estado }
+    );
+  }
+  return factura;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -60,6 +206,10 @@ router.get(
 // ─────────────────────────────────────────────────────────────
 // POST /clientes/:id/tickets — registra una compra fiada
 //
+// Los ítems se escriben acá, no salen de un inventario: nombre, talle, precio
+// del día y la especie elegida de la lista del negocio. Lo único que tiene que
+// existir de antemano es la especie.
+//
 // El ticket se pega solo a la factura abierta del cliente. Si esa factura ya
 // venció, se cierra y se abre la del período siguiente, sin que nadie tenga
 // que acordarse de hacerlo.
@@ -68,70 +218,20 @@ router.post(
   requireAuth,
   asyncHandler<RequestAutenticado>(async (req, res) => {
     const cliente = await clientePropio(req.params["id"], req.usuario._id);
-    const items = req.body?.items as { producto: string; cantidad: number }[] | undefined;
 
-    if (!items?.length) throw datosInvalidos("El ticket necesita al menos un producto");
+    const { items, total } = await construirItems(
+      req.body?.items as ItemEntrada[] | undefined,
+      req.usuario._id
+    );
+    const pagado = leerPagado(req.body?.pagado, total);
 
     const factura = await facturaAbiertaDe(cliente);
-
-    const itemsCalculados = [];
-    let total = 0;
-
-    for (const item of items) {
-      const producto = await Producto.findOne({
-        _id: item.producto,
-        administrador: req.usuario._id,
-      }).populate<{ catalogo: { _id: unknown; nombre: string } }>("catalogo", "nombre");
-
-      if (!producto) throw datosInvalidos(`El producto ${item.producto} no existe`);
-
-      const cantidad = Number(item.cantidad);
-      if (!Number.isInteger(cantidad) || cantidad < 1) {
-        throw datosInvalidos(`Cantidad inválida para "${producto.nombre}"`);
-      }
-      if (producto.stock < cantidad) {
-        throw datosInvalidos(`No hay stock suficiente de "${producto.nombre}"`, {
-          producto: producto.nombre,
-          talle: producto.talle,
-          stockDisponible: producto.stock,
-          cantidadPedida: cantidad,
-        });
-      }
-
-      const subtotal = producto.precio * cantidad;
-      total += subtotal;
-
-      // Se copian nombre, talle y precio: si mañana cambia el precio, el
-      // ticket viejo tiene que seguir diciendo lo que costó ese día.
-      itemsCalculados.push({
-        producto: producto._id,
-        catalogo: producto.catalogo._id,
-        catalogoNombre: producto.catalogo.nombre,
-        nombre: producto.nombre,
-        talle: producto.talle,
-        cantidad,
-        precioUnitario: producto.precio,
-        subtotal,
-      });
-
-      producto.stock -= cantidad;
-      await producto.save();
-    }
-
-    // Lo que deja en el momento. Sin esto, se fía todo.
-    const pagado = Number(req.body?.pagado ?? 0);
-    if (!Number.isFinite(pagado) || pagado < 0) {
-      throw datosInvalidos("El monto pagado no puede ser negativo");
-    }
-    if (pagado > total) {
-      throw datosInvalidos("Pagó más de lo que suma el ticket", { totalTicket: total, pagado });
-    }
 
     const ticket = await Ticket.create({
       factura: factura._id,
       cliente: cliente._id,
       administrador: req.usuario._id,
-      items: itemsCalculados,
+      items,
       total,
       pagado,
       registradoPor: req.usuario._id,
@@ -139,15 +239,57 @@ router.post(
 
     const actualizada = await recalcularFactura(factura._id);
 
-    // Aviso si se pasó del límite, pero no bloquea: la decisión es del dueño.
-    const warning =
-      cliente.limiteCredito > 0 && actualizada.saldo > cliente.limiteCredito
-        ? `${cliente.nombre} superó su límite de $${cliente.limiteCredito}`
-        : null;
+    res.status(201).json({
+      ticket,
+      factura: serializarFactura(actualizada),
+      warning: avisoDeLimite(cliente, actualizada),
+    });
+  })
+);
 
-    if (warning) logger.warn(warning);
+// GET /tickets/:id — uno solo, para abrirlo o editarlo
+router.get(
+  "/tickets/:id",
+  requireAuth,
+  asyncHandler<RequestAutenticado>(async (req, res) => {
+    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+    res.json(ticket);
+  })
+);
 
-    res.status(201).json({ ticket, factura: serializarFactura(actualizada), warning });
+// PUT /tickets/:id — corregir un ticket ya cargado
+//
+// Reemplaza los renglones completos, no los parchea de a uno: el front ya
+// tiene el ticket entero en el formulario, y un merge por índice haría que
+// borrar el segundo renglón dependa de mandar bien los otros.
+router.put(
+  "/tickets/:id",
+  requireAuth,
+  asyncHandler<RequestAutenticado>(async (req, res) => {
+    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+    await exigirFacturaAbierta(ticket);
+
+    const { items, total } = await construirItems(
+      req.body?.items as ItemEntrada[] | undefined,
+      req.usuario._id
+    );
+
+    // Si no mandan `pagado`, se conserva el que tenía; pero si el ticket se
+    // achicó por debajo de eso, dejarlo pasar guardaría un ticket donde dejó
+    // más de lo que se llevó.
+    const pagado = leerPagado(req.body?.pagado ?? ticket.pagado, total);
+
+    ticket.set({ items, total, pagado });
+    await ticket.save();
+
+    const cliente = await Cliente.findById(ticket.cliente);
+    const actualizada = await recalcularFactura(ticket.factura);
+
+    res.json({
+      ticket,
+      factura: serializarFactura(actualizada),
+      warning: cliente ? avisoDeLimite(cliente, actualizada) : null,
+    });
   })
 );
 
@@ -196,30 +338,30 @@ router.post(
   })
 );
 
-// DELETE /tickets/:id — anula un ticket y devuelve el stock
+// DELETE /tickets/:id — anula un ticket cargado por error
+//
+// Baja lógica: el ticket queda guardado con `anulado: true` y deja de sumar a
+// la factura. No se borra de verdad porque es un renglón de la libreta —
+// tacharlo explica por qué la cuenta del cliente cambió; borrarlo, no.
 router.delete(
   "/tickets/:id",
   requireAuth,
   asyncHandler<RequestAutenticado>(async (req, res) => {
-    const ticket = await Ticket.findOne({
-      _id: req.params["id"],
-      administrador: req.usuario._id,
-    });
-    if (!ticket) throw noEncontrado("Ticket");
+    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+    await exigirFacturaAbierta(ticket);
 
-    const factura = await Factura.findById(ticket.factura);
-    if (factura && factura.estado !== "abierta") {
-      throw datosInvalidos("No se puede anular un ticket de una factura ya cerrada");
-    }
+    ticket.anulado = true;
+    ticket.anuladoEl = new Date();
+    if (req.body?.motivo) ticket.motivoAnulacion = String(req.body.motivo).trim();
+    await ticket.save();
 
-    for (const item of ticket.items) {
-      await Producto.findByIdAndUpdate(item.producto, { $inc: { stock: item.cantidad } });
-    }
-
-    await ticket.deleteOne();
     const actualizada = await recalcularFactura(ticket.factura);
 
-    res.json({ mensaje: "Ticket anulado", factura: serializarFactura(actualizada) });
+    res.json({
+      mensaje: "Ticket anulado",
+      ticket,
+      factura: serializarFactura(actualizada),
+    });
   })
 );
 

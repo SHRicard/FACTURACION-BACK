@@ -91,7 +91,10 @@ export async function facturaAbiertaDe(cliente: ClienteDocument): Promise<Factur
  */
 export async function recalcularFactura(facturaId: Types.ObjectId): Promise<FacturaDocument> {
   const [tickets, pagos] = await Promise.all([
-    Ticket.find({ factura: facturaId }),
+    // Los anulados quedan guardados y se siguen viendo, pero no suman.
+    // `$ne: true` y no `false` a propósito: los tickets cargados antes de que
+    // existiera la baja lógica no tienen el campo.
+    Ticket.find({ factura: facturaId, anulado: { $ne: true } }),
     Pago.find({ factura: facturaId }),
   ]);
 

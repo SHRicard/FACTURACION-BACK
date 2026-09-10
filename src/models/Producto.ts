@@ -9,8 +9,8 @@ import mongoose, { Schema, type HydratedDocument, type Types } from "mongoose";
  */
 export interface ProductoAtributos {
   nombre: string;
-  /** A qué tipo pertenece: Pantalón, Remera, Zapatilla. */
-  catalogo: Types.ObjectId;
+  /** A qué especie pertenece: Pantalón, Remera, Zapatilla. */
+  especie: Types.ObjectId;
   /** Talle o medida. Texto libre porque conviven "14", "M", "34". */
   talle?: string;
   precio: number;
@@ -26,7 +26,7 @@ export type ProductoDocument = HydratedDocument<ProductoAtributos>;
 const productoSchema = new Schema<ProductoAtributos>(
   {
     nombre: { type: String, required: true, trim: true },
-    catalogo: { type: Schema.Types.ObjectId, ref: "Catalogo", required: true },
+    especie: { type: Schema.Types.ObjectId, ref: "Especie", required: true },
     talle: { type: String, trim: true },
     precio: { type: Number, required: true, min: 0 },
     stock: { type: Number, default: 0 },
@@ -37,6 +37,6 @@ const productoSchema = new Schema<ProductoAtributos>(
 );
 
 // Listar el stock de un negocio, y filtrar por tipo de producto.
-productoSchema.index({ administrador: 1, catalogo: 1 });
+productoSchema.index({ administrador: 1, especie: 1 });
 
 export default mongoose.model<ProductoAtributos>("Producto", productoSchema);

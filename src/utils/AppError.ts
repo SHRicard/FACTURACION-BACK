@@ -20,7 +20,10 @@ export class AppError extends Error {
   }
 }
 
-export const noEncontrado = (que = "Recurso"): AppError => new AppError(`${que} no encontrado`, 404);
+// El género va aparte porque el mensaje lo lee el usuario: "Factura no
+// encontrado" se nota. Por defecto masculino, que es el caso más común.
+export const noEncontrado = (que = "Recurso", genero: "o" | "a" = "o"): AppError =>
+  new AppError(`${que} no encontrad${genero}`, 404);
 
 export const datosInvalidos = (mensaje: string, detalles?: unknown): AppError =>
   new AppError(mensaje, 400, detalles);

@@ -2,7 +2,7 @@ import { Router } from "express";
 import Producto from "../models/Producto.js";
 import { requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import Catalogo from "../models/Catalogo.js";
+import Especie from "../models/Especie.js";
 import { datosInvalidos, noEncontrado } from "../utils/AppError.js";
 import type { RequestAutenticado } from "../types/index.js";
 
@@ -15,10 +15,10 @@ router.get(
   asyncHandler<RequestAutenticado>(async (req, res) => {
     const filtro: Record<string, unknown> = { administrador: req.usuario._id };
     // Permite listar solo los pantalones, por ejemplo.
-    if (typeof req.query["catalogo"] === "string") filtro["catalogo"] = req.query["catalogo"];
+    if (typeof req.query["especie"] === "string") filtro["especie"] = req.query["especie"];
 
     const productos = await Producto.find(filtro)
-      .populate("catalogo", "nombre")
+      .populate("especie", "nombre")
       .sort({ nombre: 1, talle: 1 });
 
     res.json(productos);
@@ -42,15 +42,15 @@ router.post(
   asyncHandler<RequestAutenticado>(async (req, res) => {
     // El catálogo tiene que existir y ser de este negocio: si no, un producto
     // quedaría colgado de un tipo que no le pertenece.
-    const catalogo = await Catalogo.findOne({
-      _id: req.body?.catalogo,
+    const especie = await Especie.findOne({
+      _id: req.body?.especie,
       administrador: req.usuario._id,
     });
-    if (!catalogo) throw datosInvalidos("El catálogo indicado no existe");
+    if (!especie) throw datosInvalidos("La especie indicada no existe");
 
     const producto = await Producto.create({
       nombre: req.body?.nombre,
-      catalogo: catalogo._id,
+      especie: especie._id,
       talle: req.body?.talle,
       precio: req.body?.precio,
       stock: req.body?.stock ?? 0,

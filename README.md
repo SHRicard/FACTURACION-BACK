@@ -1,7 +1,8 @@
 # Backend de Cuenta Corriente
 
 Backend con **TypeScript + Node.js + Express + MongoDB (Mongoose) + JWT**, para
-gestionar clientes, sus cuentas corrientes y los tickets de venta / pagos.
+llevar la libreta del fiado: clientes, los tickets de lo que se llevan y los
+pagos con que lo van saldando.
 
 ## Instalación
 
@@ -103,7 +104,7 @@ async deja la request colgada sin loguear nada** — es la única regla a respet
 ### Qué ves en la consola
 
 ```
-17:40:30 DEBUG POST   /clientes/68b.../movimientos 201 15.8ms (admin@tuapp.com)
+17:40:30 DEBUG POST   /clientes/68b.../tickets 201 15.8ms (admin@tuapp.com)
 17:40:30 WARN  POST   /productos 400 8.9ms (admin@tuapp.com) — Datos inválidos {"nombre":"Path `nombre` is required."}
 17:40:54 ERROR TypeError: Cannot read properties of undefined (reading 'nombre')
     at file:///.../src/routes/clientes.ts:31:30
@@ -144,7 +145,7 @@ En el MVP hay **dos**:
 | Rol | Qué puede hacer |
 | --- | --- |
 | `super_admin` | Administra la plataforma. Único que entra a `/usuarios` para crear y borrar cuentas. Se crea solo al arrancar el servidor, desde `SUPER_ADMIN_EMAIL`. |
-| `administrador` | Dueño de un negocio. Gestiona sus propios clientes, productos y movimientos. No ve los datos de otros administradores. |
+| `administrador` | Dueño de un negocio. Gestiona sus propios clientes, especies, tickets y pagos. No ve los datos de otros administradores. |
 
 **Todo usuario que se registra queda como `administrador`**, tanto por
 `/auth/registro` como por `/auth/google`. El rol nunca se lee del body: si no,
@@ -203,48 +204,62 @@ curl -X POST http://localhost:4000/usuarios \
   -d '{"nombre":"Juan","email":"juan@tienda.com","password":"1234"}'
 ```
 
-### 3. El administrador (logueado) crea un producto
+### 3. El administrador (logueado) crea sus especies
+
+Los tipos de mercadería que maneja. Se cargan una vez, y son lo único que hace
+falta tener antes de vender: **no se dan de alta productos**.
 
 ```bash
-curl -X POST http://localhost:4000/productos \
+curl -X POST http://localhost:4000/especies \
   -H "Authorization: Bearer TOKEN_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"nombre":"Remera","precio":8000,"stock":20}'
+  -d '{"nombre":"Pantalón"}'
 ```
 
-### 4. Crea un cliente con su límite de crédito (crea la cuenta corriente junto con él)
+### 4. Crea un cliente con su ventana de pago (le abre la primera factura)
 
 ```bash
 curl -X POST http://localhost:4000/clientes \
   -H "Authorization: Bearer TOKEN_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"nombre":"Cliente Uno","email":"cliente@mail.com","telefono":"123","limiteCredito":50000}'
+  -d '{"nombre":"Cliente Uno","dni":"33333333","telefono":"123","limiteCredito":50000}'
 ```
 
-### 5. Registra un ticket de venta (se suma al saldo)
+### 5. Registra un ticket (la compra fiada)
+
+El ítem se escribe acá mismo: nombre, talle y precio del día, más la especie.
 
 ```bash
-curl -X POST http://localhost:4000/clientes/ID_CLIENTE/movimientos \
+curl -X POST http://localhost:4000/clientes/ID_CLIENTE/tickets \
   -H "Authorization: Bearer TOKEN_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"tipo":"ticket","items":[{"producto":"ID_PRODUCTO","cantidad":2}],"pagado":2000}'
+  -d '{
+        "items": [
+          {"nombre":"Pantalón largo","talle":"34","especie":"ID_ESPECIE","cantidad":1,"precioUnitario":50000}
+        ],
+        "pagado": 9000
+      }'
 ```
 
-Días después, otro ticket del mismo cliente → se suma al mismo saldo (no crea otra cuenta).
+Se pega solo a la factura abierta del cliente. Si esa factura ya venció, se
+cierra y se abre la del período siguiente.
 
-### 6. Registra un pago (resta del saldo)
+### 6. Registra un pago a cuenta
 
 ```bash
-curl -X POST http://localhost:4000/clientes/ID_CLIENTE/movimientos \
+curl -X POST http://localhost:4000/clientes/ID_CLIENTE/pagos \
   -H "Authorization: Bearer TOKEN_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"tipo":"pago","monto":10000,"metodoPago":"efectivo"}'
+  -d '{"monto":10000,"metodoPago":"efectivo"}'
 ```
 
-### 7. Ver la cuenta corriente completa (saldo + historial)
+Se imputa a la factura más vieja con saldo: primero se salda lo que se debe hace
+más tiempo.
+
+### 7. Ver la cuenta abierta (saldo + tickets + pagos)
 
 ```bash
-curl http://localhost:4000/clientes/ID_CLIENTE/cuenta-corriente \
+curl http://localhost:4000/clientes/ID_CLIENTE/factura-actual \
   -H "Authorization: Bearer TOKEN_ADMIN"
 ```
 
@@ -254,12 +269,14 @@ curl http://localhost:4000/clientes/ID_CLIENTE/cuenta-corriente \
 > etapa por etapa, con el detalle de cada endpoint y lo que falta. **Empezá por acá.**
 >
 > [doc/CLIENTES.md](doc/CLIENTES.md) — sección Clientes, lista para aplicar
+> · [doc/ESPECIES.md](doc/ESPECIES.md) — sección Especies
+> · [doc/CREATE_TICK.md](doc/CREATE_TICK.md) — **el ticket**: alta, edición y anulación
+> · [doc/FACTURAS.md](doc/FACTURAS.md) — **vista de facturación**: listado y detalle
 > · [doc/README-FRONTEND.md](doc/README-FRONTEND.md) — cliente HTTP y servicio de auth
 > · [doc/GOOGLE_AUTH.md](doc/GOOGLE_AUTH.md) — login con Google en Expo
 >
-> ⚠ Las dos guías de arriba documentan el contrato **anterior** a la
-> reescritura del core (hablan de `movimientos` y `cuenta-corriente`). Se
-> actualizan a medida que el backlog avanza por cada etapa.
+> ⚠ `README-FRONTEND.md` y `GOOGLE_AUTH.md` cubren solo autenticación, que no
+> cambió. Las guías de secciones (`CLIENTES.md`, `ESPECIES.md`) están al día.
 
 Todos estos endpoints son públicos salvo los marcados con 🔒 (piden
 `Authorization: Bearer <token>`).
@@ -349,7 +366,12 @@ GET    /usuarios                          (solo super_admin)
 POST   /usuarios                          (solo super_admin)
 DELETE /usuarios/:id                      (solo super_admin)
 
-GET    /productos
+GET    /especies
+POST   /especies
+PUT    /especies/:id
+DELETE /especies/:id
+
+GET    /productos                         (lista de precios opcional, fuera del flujo)
 GET    /productos/:id
 POST   /productos
 PUT    /productos/:id
@@ -357,20 +379,21 @@ DELETE /productos/:id
 
 GET    /clientes
 GET    /clientes/:id
-POST   /clientes                          (crea cliente + cuenta corriente)
-PUT    /clientes/:id
-PUT    /clientes/:id/limite-credito
+POST   /clientes                          (crea cliente + su primera factura)
+PUT    /clientes/:id                      (parcial: el límite va acá también)
 
-GET    /clientes/:id/cuenta-corriente     (saldo + historial de movimientos)
-POST   /clientes/:id/movimientos          (registra un ticket o un pago)
-DELETE /movimientos/:id                   (anula movimiento, recalcula saldo)
+GET    /clientes/:id/factura-actual       (la cuenta abierta, con tickets y pagos)
+POST   /clientes/:id/tickets              (compra fiada: ítems escritos + especie)
+GET    /tickets/:id
+PUT    /tickets/:id                       (corrige: reemplaza los renglones)
+DELETE /tickets/:id                       (baja lógica: queda tachado)
+POST   /clientes/:id/pagos                (entrega a cuenta)
 
-GET    /clientes/:id/facturas/preview     (vista previa del período)
-POST   /clientes/:id/facturas             (emite la factura del período)
 GET    /clientes/:id/facturas             (historial del cliente)
-GET    /facturas                          (todas las del negocio)
-GET    /facturas/:id                      (detalle con tickets y productos)
+GET    /facturas                          (paginado: ?estado= ?cliente= ?vencidas= ?buscar=)
+GET    /facturas/vencidas                 (cola de cobranza)
+GET    /facturas/:id                      (detalle: factura + tickets + pagos + cliente)
+POST   /facturas/:id/cerrar
 PUT    /facturas/:id/pagada
-DELETE /facturas/:id                      (anula y libera los tickets)
 ```
 # FACTURACION-BACK

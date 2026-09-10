@@ -15,7 +15,7 @@ import usuariosRouter from "./routes/usuarios.js";
 import clientesRouter from "./routes/clientes.js";
 import productosRouter from "./routes/productos.js";
 import facturasRouter from "./routes/facturas.js";
-import catalogosRouter from "./routes/catalogos.js";
+import especiesRouter from "./routes/especies.js";
 import ticketsRouter from "./routes/tickets.js";
 
 dotenv.config();
@@ -36,7 +36,7 @@ app.use("/auth", authRouter);
 app.use("/usuarios", usuariosRouter);
 app.use("/clientes", clientesRouter);
 app.use("/productos", productosRouter);
-app.use("/catalogos", catalogosRouter);
+app.use("/especies", especiesRouter);
 app.use("/facturas", facturasRouter);
 // Define rutas completas: /clientes/:id/tickets, /clientes/:id/pagos, /tickets/:id
 app.use("/", ticketsRouter);
