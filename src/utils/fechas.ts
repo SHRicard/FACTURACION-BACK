@@ -1,9 +1,63 @@
+import { ZONA_HORARIA } from "./formato.js";
+
+/** Un día en milisegundos. */
+export const DIA_MS = 86_400_000;
+
 /**
  * Fechas del ciclo de facturación.
  *
  * El ciclo es por cliente: cada uno tiene su ventana de pago (por ejemplo del 1
- * al 10, o del 20 al 30). De ahí sale el vencimiento concreto de cada factura.
+ * al 10, o del 20 al 30). De ahí sale el vencimiento de su factura, si el
+ * administrador no acordó otra fecha.
  */
+
+// ─────────────────────────────────────────────────────────────
+// Días en hora de Argentina
+//
+// El server puede correr en UTC. Una fecha que elige el usuario ("vence el
+// 10/04") o un corte de período tiene que caer en el día de Argentina, no en
+// el de Greenwich: si no, lo del 30 a las 22 hs aparece como del 31.
+
+const formatoPartes = new Intl.DateTimeFormat("en-US", {
+  timeZone: ZONA_HORARIA,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+function partesEnZona(fecha: Date) {
+  const p: Record<string, number> = {};
+  for (const { type, value } of formatoPartes.formatToParts(fecha)) p[type] = Number(value);
+  return p as { year: number; month: number; day: number; hour: number; minute: number; second: number };
+}
+
+/** El día (año, mes 1-12, día) de un instante, visto desde Argentina. */
+export function diaEnZona(fecha: Date): { anio: number; mes: number; dia: number } {
+  const p = partesEnZona(fecha);
+  return { anio: p.year, mes: p.month, dia: p.day };
+}
+
+/**
+ * El instante en que empieza ese día en Argentina. `mes` va de 1 a 12, y se
+ * puede pasar de rango: el día 32 es el 1 del mes siguiente.
+ */
+export function inicioDelDiaEnZona(anio: number, mes: number, dia: number): Date {
+  const comoUtc = Date.UTC(anio, mes - 1, dia);
+  const p = partesEnZona(new Date(comoUtc));
+  const desfase = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - comoUtc;
+  return new Date(comoUtc - desfase);
+}
+
+/** El último instante de ese día en Argentina: así vence una fecha elegida. */
+export const finDelDiaEnZona = (anio: number, mes: number, dia: number): Date =>
+  new Date(inicioDelDiaEnZona(anio, mes, dia + 1).getTime() - 1);
+
+// ─────────────────────────────────────────────────────────────
+// La ventana de pago
 
 /** Cuántos días tiene el mes de una fecha. Contempla los bisiestos. */
 export const diasDelMes = (anio: number, mes: number): number =>

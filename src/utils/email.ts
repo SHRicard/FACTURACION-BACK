@@ -16,8 +16,13 @@ export interface Mail {
   asunto: string;
   html: string;
   texto?: string;
-  /** Adjuntos embebidos (el logo va por acá, referenciado con cid:). */
+  /** Adjuntos: el logo embebido (cid:) y archivos como el PDF de una factura. */
   adjuntos?: Adjunto[];
+  /**
+   * A dónde van las respuestas. El mail sale desde MAIL_FROM (la plataforma);
+   * sin esto, cuando el cliente responde le escribe a Morgana y no al negocio.
+   */
+  responderA?: string;
 }
 
 export interface ResultadoEnvio {
@@ -127,6 +132,7 @@ export async function enviarEmail({
   html,
   texto,
   adjuntos,
+  responderA,
 }: Mail): Promise<ResultadoEnvio> {
   const { from } = configMail();
 
@@ -136,6 +142,15 @@ export async function enviarEmail({
     logger.info("📧 Email (no enviado, SMTP sin configurar)");
     logger.info(`   para:   ${para}`);
     logger.info(`   asunto: ${asunto}`);
+    if (responderA) logger.info(`   responder a: ${responderA}`);
+    // Los archivos adjuntos se nombran con su peso, para ver que el PDF salió.
+    const archivos = adjuntos?.filter((a) => !a.cid) ?? [];
+    if (archivos.length) {
+      const lista = archivos.map((a) =>
+        a.content ? `${a.filename} (${Math.ceil(a.content.length / 1024)} KB)` : a.filename
+      );
+      logger.info(`   adjuntos: ${lista.join(", ")}`);
+    }
     if (texto) logger.info(`   ${texto.trim().replace(/\n/g, "\n   ")}`);
     return { enviado: false, motivo: "SMTP sin configurar" };
   }
@@ -147,6 +162,7 @@ export async function enviarEmail({
       subject: asunto,
       html,
       text: texto,
+      ...(responderA ? { replyTo: responderA } : {}),
       ...(adjuntos?.length ? { attachments: adjuntos } : {}),
     });
     logger.info(`📧 Email enviado a ${para} (${info.messageId})`);

@@ -26,7 +26,7 @@ export interface TicketAtributos {
   /** A qué factura se pegó. Siempre la que estaba abierta al cargarlo. */
   factura: Types.ObjectId;
   cliente: Types.ObjectId;
-  administrador: Types.ObjectId;
+  marca: Types.ObjectId;
 
   fecha: Date;
   items: ItemTicket[];
@@ -39,7 +39,7 @@ export interface TicketAtributos {
    */
   pagado: number;
 
-  registradoPor: Types.ObjectId;
+  registradoPor?: Types.ObjectId;
 
   /**
    * Baja lógica. El ticket cargado por error no se borra: se tacha.
@@ -82,7 +82,7 @@ const ticketSchema = new Schema<TicketAtributos>(
   {
     factura: { type: Schema.Types.ObjectId, ref: "Factura", required: true },
     cliente: { type: Schema.Types.ObjectId, ref: "Cliente", required: true },
-    administrador: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    marca: { type: Schema.Types.ObjectId, ref: "Marca", required: true },
 
     fecha: { type: Date, default: Date.now },
     items: { type: [itemSchema], required: true },
@@ -90,7 +90,7 @@ const ticketSchema = new Schema<TicketAtributos>(
     total: { type: Number, required: true, min: 0 },
     pagado: { type: Number, default: 0, min: 0 },
 
-    registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario" },
 
     anulado: { type: Boolean, default: false },
     anuladoEl: { type: Date },
@@ -107,6 +107,6 @@ ticketSchema.set("toJSON", {
 ticketSchema.index({ factura: 1, fecha: 1 });
 ticketSchema.index({ cliente: 1, fecha: -1 });
 // Para las métricas de qué especie se vende más.
-ticketSchema.index({ administrador: 1, "items.especie": 1, fecha: -1 });
+ticketSchema.index({ marca: 1, "items.especie": 1, fecha: -1 });
 
 export default mongoose.model<TicketAtributos>("Ticket", ticketSchema);

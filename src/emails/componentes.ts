@@ -1,4 +1,5 @@
 import { color, fuente } from "./tokens.js";
+import { mezclar } from "../utils/colores.js";
 
 // Piezas sueltas para armar un email.
 //
@@ -6,7 +7,7 @@ import { color, fuente } from "./tokens.js";
 // motor de Word (sin flex ni grid) y Gmail descarta gran parte de un <style>.
 // Es feo comparado con una página web, pero es lo que se ve igual en todos lados.
 
-const escaparHtml = (texto: string): string =>
+export const escaparHtml = (texto: string): string =>
   texto
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -115,13 +116,6 @@ export const pasos = (items: { titulo: string; detalle: string }[]): string => `
       .join("")}
   </table>
 `;
-
-/** Mezcla dos colores hex. t=0 devuelve el primero, t=1 el segundo. */
-function mezclar(desde: string, hasta: string, t: number): string {
-  const canal = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
-  const val = (i: number) => Math.round(canal(desde, i) + (canal(hasta, i) - canal(desde, i)) * t);
-  return `#${[0, 1, 2].map((i) => val(i).toString(16).padStart(2, "0")).join("")}`;
-}
 
 /**
  * Filete degradado con la rampa del logo.

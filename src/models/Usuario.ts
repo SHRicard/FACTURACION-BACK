@@ -1,4 +1,9 @@
-import mongoose, { Schema, type HydratedDocument, type Model } from "mongoose";
+import mongoose, {
+  Schema,
+  type HydratedDocument,
+  type Model,
+  type Types,
+} from "mongoose";
 import { ROLES, ROL_POR_DEFECTO, type Rol } from "../config/roles.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -16,6 +21,17 @@ export type Proveedor = (typeof PROVEEDORES)[number];
 export interface UsuarioAtributos {
   nombre: string;
   email: string;
+  /**
+   * DNI, sin puntos. Obligatorio para operar: se pide en "completá tu perfil"
+   * después de registrarse. Es único y es con lo que un dueño suma a otro a
+   * su marca, así que no lo cambia el usuario: lo corrige el super_admin.
+   */
+  dni?: string;
+  /**
+   * La marca en la que trabaja. Una sola: no se pasa de una a otra. Sin
+   * marca no puede operar (ver middleware/marca.ts).
+   */
+  marca?: Types.ObjectId | null;
   /** Opcional: las cuentas creadas con Google no tienen contraseña. */
   password?: string;
   rol: Rol;
@@ -27,6 +43,11 @@ export interface UsuarioAtributos {
   googleId?: string;
   /** Foto de perfil que devuelve Google. */
   avatar?: string;
+
+  /** Aceptación explícita de los documentos legales vigentes. */
+  aceptoTerminosYCondiciones: boolean;
+  terminosYCondicionesVersion?: string;
+  terminosYCondicionesAceptadosEn?: Date;
 
   // --- Recuperación de contraseña ---
   // Guardamos el HASH del token, no el token. Si alguien lee la base no puede
@@ -48,13 +69,32 @@ export interface UsuarioMetodos {
   generarTokenReset(): string;
 }
 
-export type UsuarioDocument = HydratedDocument<UsuarioAtributos, UsuarioMetodos>;
-type UsuarioModel = Model<UsuarioAtributos, Record<string, never>, UsuarioMetodos>;
+export type UsuarioDocument = HydratedDocument<
+  UsuarioAtributos,
+  UsuarioMetodos
+>;
+type UsuarioModel = Model<
+  UsuarioAtributos,
+  Record<string, never>,
+  UsuarioMetodos
+>;
 
-const usuarioSchema = new Schema<UsuarioAtributos, UsuarioModel, UsuarioMetodos>(
+const usuarioSchema = new Schema<
+  UsuarioAtributos,
+  UsuarioModel,
+  UsuarioMetodos
+>(
   {
     nombre: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    dni: { type: String, trim: true, match: /^\d{7,8}$/ },
+    marca: { type: Schema.Types.ObjectId, ref: "Marca" },
     password: {
       type: String,
       minlength: 6,
@@ -72,12 +112,25 @@ const usuarioSchema = new Schema<UsuarioAtributos, UsuarioModel, UsuarioMetodos>
     googleId: { type: String, unique: true, sparse: true },
     avatar: { type: String },
 
+    aceptoTerminosYCondiciones: { type: Boolean, default: false },
+    terminosYCondicionesVersion: { type: String },
+    terminosYCondicionesAceptadosEn: { type: Date },
+
     resetPasswordToken: { type: String, select: false },
     resetPasswordExpira: { type: Date, select: false },
     passwordCambiadoEn: { type: Date, select: false },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
+
+// El DNI no se repite entre cuentas. Parcial y no `sparse`, por la misma razón
+// que el correlativo de las facturas: solo cuenta a los que ya lo cargaron.
+usuarioSchema.index(
+  { dni: 1 },
+  { unique: true, partialFilterExpression: { dni: { $type: "string" } } },
+);
+// Los dueños de una marca (el virtual `duenos` de Marca busca por acá).
+usuarioSchema.index({ marca: 1 });
 
 // Hashea el password antes de guardar, solo si cambió
 usuarioSchema.pre("save", async function (next) {
@@ -91,7 +144,7 @@ usuarioSchema.pre("save", async function (next) {
 
 // Compara un password plano contra el hash guardado
 usuarioSchema.methods.compararPassword = async function (
-  passwordPlano: string
+  passwordPlano: string,
 ): Promise<boolean> {
   // Cuenta creada con Google: no hay hash contra el cual comparar.
   if (!this.password) return false;
@@ -99,7 +152,9 @@ usuarioSchema.methods.compararPassword = async function (
 };
 
 // ¿El token se emitió antes del último cambio de contraseña?
-usuarioSchema.methods.passwordCambioDespuesDelToken = function (emitidoEn: number): boolean {
+usuarioSchema.methods.passwordCambioDespuesDelToken = function (
+  emitidoEn: number,
+): boolean {
   if (!this.passwordCambiadoEn) return false;
   return this.passwordCambiadoEn.getTime() > emitidoEn * 1000;
 };
@@ -110,7 +165,9 @@ usuarioSchema.methods.generarTokenReset = function (): string {
   const token = crypto.randomBytes(32).toString("hex");
 
   this.resetPasswordToken = hashearToken(token);
-  this.resetPasswordExpira = new Date(Date.now() + MINUTOS_VALIDEZ_RESET * 60 * 1000);
+  this.resetPasswordExpira = new Date(
+    Date.now() + MINUTOS_VALIDEZ_RESET * 60 * 1000,
+  );
 
   return token;
 };
@@ -123,10 +180,18 @@ export const hashearToken = (token: string): string =>
 usuarioSchema.set("toJSON", {
   transform: (_doc, ret) => {
     // Sacamos los campos sensibles quedándonos con el resto.
-    const { password, resetPasswordToken, resetPasswordExpira, passwordCambiadoEn, ...publico } =
-      ret;
+    const {
+      password,
+      resetPasswordToken,
+      resetPasswordExpira,
+      passwordCambiadoEn,
+      ...publico
+    } = ret;
     return publico;
   },
 });
 
-export default mongoose.model<UsuarioAtributos, UsuarioModel>("Usuario", usuarioSchema);
+export default mongoose.model<UsuarioAtributos, UsuarioModel>(
+  "Usuario",
+  usuarioSchema,
+);

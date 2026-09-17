@@ -149,28 +149,8 @@ console.log(`OK\tLOG_LEVEL\t${nivelLog}`);
 const frontend = process.env.FRONTEND_URL || "http://localhost:5173 (por defecto)";
 console.log(`OK\tFRONTEND_URL\t${frontend}`);
 
-// Acepta MAIL_* (preferido) y SMTP_* como alias, igual que utils/email.ts.
-const mailHost = process.env.MAIL_HOST || process.env.SMTP_HOST;
-const mailUser = process.env.MAIL_USER || process.env.SMTP_USER;
-const mailPass = process.env.MAIL_PASS || process.env.SMTP_PASS;
-const mailPort = process.env.MAIL_PORT || process.env.SMTP_PORT || "587";
-console.log(
-  `OK\tMAIL\t${
-    mailHost && mailUser && mailPass
-      ? `${mailUser} vía ${mailHost}:${mailPort}`
-      : "sin configurar → los mails van a la consola"
-  }`
-);
-
-const idsGoogle = ["GOOGLE_CLIENT_ID_WEB", "GOOGLE_CLIENT_ID_IOS", "GOOGLE_CLIENT_ID_ANDROID", "GOOGLE_CLIENT_ID"]
-  .filter((k) => process.env[k]);
-console.log(
-  `OK\tGOOGLE\t${
-    idsGoogle.length
-      ? `${idsGoogle.length} client ID (${idsGoogle.map((k) => k.replace("GOOGLE_CLIENT_ID_", "").replace("GOOGLE_CLIENT_ID", "generico").toLowerCase()).join(", ")})`
-      : "sin configurar → /auth/google responde 503"
-  }`
-);
+const smtpOk = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+console.log(`OK\tSMTP\t${smtpOk ? process.env.SMTP_HOST : "sin configurar → los mails van a la consola"}`);
 
 // Avisos de seguridad, no bloquean el arranque.
 if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32)

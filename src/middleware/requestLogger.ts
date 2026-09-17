@@ -16,9 +16,15 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     const color: Color =
       res.statusCode >= 500 ? "rojo" : res.statusCode >= 400 ? "amarillo" : "verde";
 
+    // El token de un link público es una llave: al log va solo la punta.
+    const url = req.originalUrl.replace(
+      /(\/publico\/facturas\/)([^/?]+)/,
+      (_todo, prefijo: string, token: string) => `${prefijo}…${token.slice(-6)}`
+    );
+
     const partes: string[] = [
       pintar(req.method.padEnd(6), "negrita"),
-      req.originalUrl,
+      url,
       pintar(res.statusCode, color),
       pintar(`${ms.toFixed(1)}ms`, "gris"),
     ];

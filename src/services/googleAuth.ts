@@ -1,8 +1,9 @@
 import Usuario, { type UsuarioDocument } from "../models/Usuario.js";
-import { noAutorizado } from "../utils/AppError.js";
+import { datosInvalidos, noAutorizado } from "../utils/AppError.js";
 import { ROL_POR_DEFECTO } from "../config/roles.js";
 import { logger } from "../utils/logger.js";
 import type { PerfilGoogle } from "../utils/google.js";
+import { VERSION_DOCUMENTOS_LEGALES } from "../legal/documentos.js";
 
 /** Qué pasó al resolver la cuenta. El caller decide qué hacer con cada caso. */
 export type ResultadoGoogle =
@@ -17,7 +18,10 @@ export type ResultadoGoogle =
  * Está separado de la ruta porque acá está la parte delicada: decidir cuándo
  * una cuenta de Google puede tomar el control de una cuenta local existente.
  */
-export async function resolverUsuarioGoogle(perfil: PerfilGoogle): Promise<ResultadoGoogle> {
+export async function resolverUsuarioGoogle(
+  perfil: PerfilGoogle,
+  aceptaTerminos = false,
+): Promise<ResultadoGoogle> {
   // 1) Ya entró con Google antes. Es el camino normal.
   const porGoogleId = await Usuario.findOne({ googleId: perfil.googleId });
   if (porGoogleId) return { usuario: porGoogleId, caso: "existente" };
@@ -29,7 +33,9 @@ export async function resolverUsuarioGoogle(perfil: PerfilGoogle): Promise<Resul
     // podría crear una cuenta de Google con un email ajeno y quedarse con la
     // cuenta local de esa persona.
     if (!perfil.emailVerificado) {
-      throw noAutorizado("Google no confirmó que ese email sea tuyo. Entrá con tu contraseña.");
+      throw noAutorizado(
+        "Google no confirmó que ese email sea tuyo. Entrá con tu contraseña.",
+      );
     }
 
     porEmail.googleId = perfil.googleId;
@@ -48,12 +54,26 @@ export async function resolverUsuarioGoogle(perfil: PerfilGoogle): Promise<Resul
     throw noAutorizado("Google no confirmó ese email. Probá con otra cuenta.");
   }
 
+  if (!aceptaTerminos) {
+    throw datosInvalidos(
+      "Tenés que aceptar los términos y condiciones y la política de privacidad",
+      { campo: "aceptoTerminosYCondiciones" },
+    );
+  }
+
   const usuario = await Usuario.create({
     nombre: perfil.nombre,
     email: perfil.email,
     rol: ROL_POR_DEFECTO,
     proveedor: "google",
     googleId: perfil.googleId,
+    aceptoTerminosYCondiciones: aceptaTerminos,
+    ...(aceptaTerminos
+      ? {
+          terminosYCondicionesVersion: VERSION_DOCUMENTOS_LEGALES,
+          terminosYCondicionesAceptadosEn: new Date(),
+        }
+      : {}),
     ...(perfil.avatar ? { avatar: perfil.avatar } : {}),
   });
 

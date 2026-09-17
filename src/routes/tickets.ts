@@ -2,29 +2,35 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import Factura, { type FacturaDocument } from "../models/Factura.js";
 import Ticket, { type TicketDocument } from "../models/Ticket.js";
-import Pago from "../models/Pago.js";
 import Cliente, { type ClienteDocument } from "../models/Cliente.js";
 import Especie from "../models/Especie.js";
-import { requireAuth } from "../middleware/auth.js";
+import { conMarca } from "../middleware/marca.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { datosInvalidos, noEncontrado } from "../utils/AppError.js";
 import { logger } from "../utils/logger.js";
 import {
+  ajustarEstadoPorSaldo,
+  detalleFactura,
   facturaAbiertaDe,
+  fijarVencimiento,
+  leerVencimiento,
   recalcularFactura,
   serializarFactura,
 } from "../services/facturacion.js";
-import type { RequestAutenticado } from "../types/index.js";
+import { generarPdfFactura } from "../services/pdfFactura.js";
+import { enviarPdf } from "../utils/respuestaPdf.js";
+import type { RequestConMarca } from "../types/index.js";
 
 const router = Router();
 
 // Este router define rutas completas (/clientes/... y /tickets/...), así que el
-// auth va ruta por ruta: con router.use(requireAuth) atraparía toda request que
-// no matcheó antes y devolvería 401 en vez del 404 de notFound.
+// auth va ruta por ruta (`conMarca` = requireAuth + requireMarca): con
+// router.use atraparía toda request que no matcheó antes y devolvería 401 en
+// vez del 404 de notFound.
 
-/** Cliente del administrador logueado, o 404. */
-async function clientePropio(clienteId: string | undefined, administradorId: unknown) {
-  const cliente = await Cliente.findOne({ _id: clienteId, administrador: administradorId });
+/** Cliente de la marca, o 404. */
+async function clientePropio(clienteId: string | undefined, marcaId: unknown) {
+  const cliente = await Cliente.findOne({ _id: clienteId, marca: marcaId });
   if (!cliente) throw noEncontrado("Cliente");
   return cliente;
 }
@@ -40,12 +46,12 @@ interface ItemEntrada {
 
 /**
  * Las especies que nombra el ticket, en una sola consulta y ya filtradas por
- * negocio: así una especie de otro administrador no entra ni por error.
+ * marca: así una especie de otra marca no entra ni por error.
  *
  * Los ids mal formados se descartan acá en vez de dejarlos llegar al $in, que
  * respondería un CastError genérico en lugar de decir qué renglón falla.
  */
-async function especiesDelTicket(items: ItemEntrada[], administradorId: unknown) {
+async function especiesDelTicket(items: ItemEntrada[], marcaId: unknown) {
   const ids = [
     ...new Set(
       items
@@ -54,7 +60,7 @@ async function especiesDelTicket(items: ItemEntrada[], administradorId: unknown)
     ),
   ];
 
-  const especies = await Especie.find({ _id: { $in: ids }, administrador: administradorId });
+  const especies = await Especie.find({ _id: { $in: ids }, marca: marcaId });
   return new Map(especies.map((especie) => [String(especie._id), especie]));
 }
 
@@ -67,12 +73,12 @@ async function especiesDelTicket(items: ItemEntrada[], administradorId: unknown)
  * No toca la base: o devuelve todo bien, o tira. Por eso un ticket con un
  * renglón inválido no deja nada a medias.
  */
-async function construirItems(items: ItemEntrada[] | undefined, administradorId: unknown) {
+async function construirItems(items: ItemEntrada[] | undefined, marcaId: unknown) {
   if (!items?.length) throw datosInvalidos("El ticket necesita al menos un ítem");
 
   // Las especies se traen todas juntas: son pocas y así no se hace una
   // consulta por renglón del ticket.
-  const especies = await especiesDelTicket(items, administradorId);
+  const especies = await especiesDelTicket(items, marcaId);
 
   const itemsCalculados = [];
   let total = 0;
@@ -142,13 +148,13 @@ function leerPagado(crudo: unknown, total: number): number {
 }
 
 /**
- * Un ticket del administrador logueado, o 404.
+ * Un ticket de la marca, o 404.
  *
  * Los anulados siguen siendo visibles —el historial no se esconde—, pero no se
  * pueden volver a tocar: eso lo chequea cada handler.
  */
-async function ticketPropio(ticketId: string | undefined, administradorId: unknown) {
-  const ticket = await Ticket.findOne({ _id: ticketId, administrador: administradorId });
+async function ticketPropio(ticketId: string | undefined, marcaId: unknown) {
+  const ticket = await Ticket.findOne({ _id: ticketId, marca: marcaId });
   if (!ticket) throw noEncontrado("Ticket");
   return ticket;
 }
@@ -156,8 +162,8 @@ async function ticketPropio(ticketId: string | undefined, administradorId: unkno
 /**
  * Un ticket solo se puede editar o anular mientras su factura sigue abierta.
  *
- * Una vez cerrada ya tiene número y el cliente vio ese resumen: cambiarle los
- * renglones por atrás reescribiría algo que ya se comunicó.
+ * Una vez saldada ya tiene número y cumplimiento: cambiarle los renglones por
+ * atrás reescribiría un registro que ya quedó cerrado.
  */
 async function exigirFacturaAbierta(ticket: TicketDocument) {
   if (ticket.anulado) {
@@ -178,28 +184,42 @@ async function exigirFacturaAbierta(ticket: TicketDocument) {
 // GET /clientes/:id/facturas — historial del cliente
 router.get(
   "/clientes/:id/facturas",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const cliente = await clientePropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const cliente = await clientePropio(req.params["id"], req.marca._id);
     const facturas = await Factura.find({ cliente: cliente._id }).sort({ createdAt: -1 });
     res.json(facturas.map(serializarFactura));
   })
 );
 
-// GET /clientes/:id/factura-actual — la cuenta abierta, con lo que va llevando
+// GET /clientes/:id/factura-actual — la factura activa, con lo que va llevando
 router.get(
   "/clientes/:id/factura-actual",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const cliente = await clientePropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const cliente = await clientePropio(req.params["id"], req.marca._id);
     const factura = await facturaAbiertaDe(cliente);
+    res.json(await detalleFactura(factura, cliente));
+  })
+);
 
-    const [tickets, pagos] = await Promise.all([
-      Ticket.find({ factura: factura._id }).sort({ fecha: 1 }),
-      Pago.find({ factura: factura._id }).sort({ fecha: 1 }),
-    ]);
+// GET /clientes/:id/factura-actual/pdf — la factura activa, en PDF
+//
+// Para mandar una factura puntual (por ejemplo una ya saldada, como
+// comprobante) está GET /facturas/:id/pdf.
+router.get(
+  "/clientes/:id/factura-actual/pdf",
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const cliente = await clientePropio(req.params["id"], req.marca._id);
+    const factura = await facturaAbiertaDe(cliente);
+    const { buffer, nombreArchivo } = await generarPdfFactura(factura, { cliente });
 
-    res.json({ cliente, factura: serializarFactura(factura), tickets, pagos });
+    enviarPdf(res, {
+      buffer,
+      nombreArchivo,
+      disposicion: req.query["inline"] === "1" ? "inline" : "attachment",
+    });
   })
 );
 
@@ -207,33 +227,40 @@ router.get(
 // POST /clientes/:id/tickets — registra una compra fiada
 //
 // Los ítems se escriben acá, no salen de un inventario: nombre, talle, precio
-// del día y la especie elegida de la lista del negocio. Lo único que tiene que
+// del día y la especie elegida de la lista de la marca. Lo único que tiene que
 // existir de antemano es la especie.
 //
-// El ticket se pega solo a la factura abierta del cliente. Si esa factura ya
-// venció, se cierra y se abre la del período siguiente, sin que nadie tenga
-// que acordarse de hacerlo.
+// El ticket se pega solo a la factura activa del cliente, aunque ya esté
+// vencida: se le permite llevar más, y se suma a lo que debe. Solo cuando la
+// deuda llega a cero la factura se cierra y la próxima compra abre otra.
+//
+// `venceEl` (aaaa-mm-dd, opcional) es la fecha que acordó con el cliente. Vale
+// solo en el primer ticket de la factura, que es cuando se fija; sin eso, sale
+// de su ventana de pago. Para cambiarla después: PUT /facturas/:id/vencimiento.
 router.post(
   "/clientes/:id/tickets",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const cliente = await clientePropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const cliente = await clientePropio(req.params["id"], req.marca._id);
 
     const { items, total } = await construirItems(
       req.body?.items as ItemEntrada[] | undefined,
-      req.usuario._id
+      req.marca._id
     );
     const pagado = leerPagado(req.body?.pagado, total);
+    const vencimientoElegido = req.body?.venceEl ? leerVencimiento(req.body.venceEl) : undefined;
 
     const factura = await facturaAbiertaDe(cliente);
+    if (factura.cantidadTickets === 0) await fijarVencimiento(factura, cliente, vencimientoElegido);
 
     const ticket = await Ticket.create({
       factura: factura._id,
       cliente: cliente._id,
-      administrador: req.usuario._id,
+      marca: req.marca._id,
       items,
       total,
       pagado,
+      // Con varios dueños, esto dice cuál de todos lo cargó.
       registradoPor: req.usuario._id,
     });
 
@@ -250,9 +277,9 @@ router.post(
 // GET /tickets/:id — uno solo, para abrirlo o editarlo
 router.get(
   "/tickets/:id",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const ticket = await ticketPropio(req.params["id"], req.marca._id);
     res.json(ticket);
   })
 );
@@ -264,14 +291,14 @@ router.get(
 // borrar el segundo renglón dependa de mandar bien los otros.
 router.put(
   "/tickets/:id",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const ticket = await ticketPropio(req.params["id"], req.marca._id);
     await exigirFacturaAbierta(ticket);
 
     const { items, total } = await construirItems(
       req.body?.items as ItemEntrada[] | undefined,
-      req.usuario._id
+      req.marca._id
     );
 
     // Si no mandan `pagado`, se conserva el que tenía; pero si el ticket se
@@ -283,7 +310,8 @@ router.put(
     await ticket.save();
 
     const cliente = await Cliente.findById(ticket.cliente);
-    const actualizada = await recalcularFactura(ticket.factura);
+    // Achicar un ticket puede dejarla en cero si ya había pagos: ahí se salda.
+    const actualizada = await ajustarEstadoPorSaldo(await recalcularFactura(ticket.factura));
 
     res.json({
       ticket,
@@ -293,50 +321,7 @@ router.put(
   })
 );
 
-// POST /clientes/:id/pagos — entrega plata a cuenta
-router.post(
-  "/clientes/:id/pagos",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const cliente = await clientePropio(req.params["id"], req.usuario._id);
-
-    const monto = Number(req.body?.monto);
-    if (!Number.isFinite(monto) || monto <= 0) {
-      throw datosInvalidos("El monto del pago tiene que ser mayor a 0");
-    }
-
-    // Se imputa a la factura más vieja con saldo: primero se salda lo que se
-    // debe hace más tiempo. Si no hay ninguna, va a la abierta del período.
-    const conDeuda = await Factura.findOne({
-      cliente: cliente._id,
-      estado: { $in: ["abierta", "cerrada"] },
-      saldo: { $gt: 0 },
-    }).sort({ venceEl: 1 });
-
-    const factura = conDeuda ?? (await facturaAbiertaDe(cliente));
-
-    const pago = await Pago.create({
-      factura: factura._id,
-      cliente: cliente._id,
-      administrador: req.usuario._id,
-      monto,
-      metodoPago: req.body?.metodoPago,
-      nota: req.body?.nota,
-      registradoPor: req.usuario._id,
-    });
-
-    const actualizada = await recalcularFactura(factura._id);
-
-    // Si con este pago quedó en cero y ya estaba cerrada, se da por saldada.
-    if (actualizada.estado === "cerrada" && actualizada.saldo <= 0) {
-      actualizada.estado = "pagada";
-      actualizada.pagadaEl = new Date();
-      await actualizada.save();
-    }
-
-    res.status(201).json({ pago, factura: serializarFactura(actualizada) });
-  })
-);
+// Los pagos a cuenta están en routes/pagos.ts.
 
 // DELETE /tickets/:id — anula un ticket cargado por error
 //
@@ -345,9 +330,9 @@ router.post(
 // tacharlo explica por qué la cuenta del cliente cambió; borrarlo, no.
 router.delete(
   "/tickets/:id",
-  requireAuth,
-  asyncHandler<RequestAutenticado>(async (req, res) => {
-    const ticket = await ticketPropio(req.params["id"], req.usuario._id);
+  conMarca,
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    const ticket = await ticketPropio(req.params["id"], req.marca._id);
     await exigirFacturaAbierta(ticket);
 
     ticket.anulado = true;
@@ -355,7 +340,7 @@ router.delete(
     if (req.body?.motivo) ticket.motivoAnulacion = String(req.body.motivo).trim();
     await ticket.save();
 
-    const actualizada = await recalcularFactura(ticket.factura);
+    const actualizada = await ajustarEstadoPorSaldo(await recalcularFactura(ticket.factura));
 
     res.json({
       mensaje: "Ticket anulado",

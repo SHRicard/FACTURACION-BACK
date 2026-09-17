@@ -1,6 +1,9 @@
-// Siembra una lista inicial de especies para un administrador.
+// Siembra una lista inicial de especies para una marca.
 //
-//   node scripts/sembrar-especies.mjs <email>
+//   node scripts/sembrar-especies.mjs <email de un dueño>
+//
+// La marca se busca por el email de cualquiera de sus dueños: las especies son
+// de la marca, así que las ven todos.
 //
 // Son categorías amplias a propósito: la gracia de la especie es agrupar, así
 // que la lista tiene que quedar corta. "Campera" sí, "Campera de invierno azul"
@@ -25,24 +28,28 @@ const ESPECIES = [
 
 const email = process.argv[2];
 if (!email) {
-  console.error("Falta el email: node scripts/sembrar-especies.mjs <email>");
+  console.error("Falta el email: node scripts/sembrar-especies.mjs <email de un dueño>");
   process.exit(1);
 }
 
 await mongoose.connect(process.env.MONGO_URI);
 const db = mongoose.connection.db;
 
-const usuario = await db.collection("usuarios").findOne({ email });
-if (!usuario) {
-  console.error(`No hay ningún usuario con el email ${email}`);
+const salir = async (mensaje) => {
+  console.error(mensaje);
   await mongoose.disconnect();
   process.exit(1);
-}
+};
+
+const usuario = await db.collection("usuarios").findOne({ email });
+if (!usuario) await salir(`No hay ningún usuario con el email ${email}`);
+if (!usuario.marca) await salir(`${email} todavía no tiene marca: primero tiene que crearla`);
+
+const marca = await db.collection("marcas").findOne({ _id: usuario.marca });
+if (!marca) await salir(`La marca de ${email} no existe`);
 
 const yaEstan = new Set(
-  (await db.collection("especies").find({ administrador: usuario._id }).toArray()).map(
-    (e) => e.nombre
-  )
+  (await db.collection("especies").find({ marca: marca._id }).toArray()).map((e) => e.nombre)
 );
 
 const ahora = new Date();
@@ -50,7 +57,7 @@ const nuevas = ESPECIES.filter(([nombre]) => !yaEstan.has(nombre)).map(([nombre,
   nombre,
   descripcion,
   activo: true,
-  administrador: usuario._id,
+  marca: marca._id,
   createdAt: ahora,
   updatedAt: ahora,
   __v: 0,
@@ -58,14 +65,10 @@ const nuevas = ESPECIES.filter(([nombre]) => !yaEstan.has(nombre)).map(([nombre,
 
 if (nuevas.length) await db.collection("especies").insertMany(nuevas);
 
-console.log(`${usuario.nombre ?? email} (${email})`);
+console.log(`${marca.nombre} (marca de ${email})`);
 console.log(`  creadas: ${nuevas.length}   ya estaban: ${ESPECIES.length - nuevas.length}`);
 console.log("");
-for (const e of await db
-  .collection("especies")
-  .find({ administrador: usuario._id })
-  .sort({ nombre: 1 })
-  .toArray()) {
+for (const e of await db.collection("especies").find({ marca: marca._id }).sort({ nombre: 1 }).toArray()) {
   console.log(`  ${e.activo ? "●" : "○"} ${e.nombre.padEnd(16)} ${e.descripcion ?? ""}`);
 }
 

@@ -58,7 +58,7 @@ function traducirError(error: unknown): ErrorTraducido {
     // Nombrar solo el primero manda a buscar el problema al lugar equivocado:
     // "ya existe un registro con ese administrador" cuando en realidad se
     // repite el DNI dentro de ese negocio.
-    const utiles = campos.filter((c) => c !== "administrador");
+    const utiles = campos.filter((c) => c !== "marca");
     const nombrar = (utiles.length ? utiles : campos).join(" + ") || "valor";
 
     return { statusCode: 409, mensaje: `Ya existe un registro con ese ${nombrar}` };

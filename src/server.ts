@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import "dotenv/config";
 import { connectDB } from "./config/db.js";
 import Usuario from "./models/Usuario.js";
 
@@ -17,11 +17,16 @@ import productosRouter from "./routes/productos.js";
 import facturasRouter from "./routes/facturas.js";
 import especiesRouter from "./routes/especies.js";
 import ticketsRouter from "./routes/tickets.js";
-
-dotenv.config();
+import pagosRouter from "./routes/pagos.js";
+import publicoRouter from "./routes/publico.js";
+import marcasRouter from "./routes/marcas.js";
+import metricasRouter from "./routes/metricas.js";
+import legalRouter from "./routes/legal.js";
 
 const app = express();
-app.use(cors());
+// El front web lee el nombre del PDF de Content-Disposition, y el navegador
+// solo le deja leer los headers que se exponen acá.
+app.use(cors({ exposedHeaders: ["Content-Disposition"] }));
 app.use(express.json());
 app.use(requestLogger);
 
@@ -29,17 +34,26 @@ app.get(
   "/",
   asyncHandler(async (_req, res) => {
     res.json({ mensaje: "API de cuenta corriente funcionando 🚀" });
-  })
+  }),
 );
 
 app.use("/auth", authRouter);
 app.use("/usuarios", usuariosRouter);
+app.use("/marcas", marcasRouter);
 app.use("/clientes", clientesRouter);
 app.use("/productos", productosRouter);
 app.use("/especies", especiesRouter);
 app.use("/facturas", facturasRouter);
-// Define rutas completas: /clientes/:id/tickets, /clientes/:id/pagos, /tickets/:id
+app.use("/metricas", metricasRouter);
+// Documentos legales públicos: Play Console y la app pueden consultarlos sin login.
+app.use("/legal", legalRouter);
+// Sin login: los links que el cliente abre desde WhatsApp.
+app.use("/publico", publicoRouter);
+// Estos dos definen rutas completas:
+//   tickets → /clientes/:id/tickets, /clientes/:id/factura-actual, /tickets/:id
+//   pagos   → /clientes/:id/pagos, /facturas/:id/pagos, /pagos/:id
 app.use("/", ticketsRouter);
+app.use("/", pagosRouter);
 
 // Estos dos van siempre al final, después de todas las rutas.
 app.use(notFound);
@@ -54,11 +68,18 @@ async function crearSuperAdminInicial(): Promise<void> {
   const password = process.env["SUPER_ADMIN_PASSWORD"];
 
   if (!email || !password) {
-    logger.warn("Sin SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD no se crea el super admin inicial");
+    logger.warn(
+      "Sin SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD no se crea el super admin inicial",
+    );
     return;
   }
 
-  await Usuario.create({ nombre: "Super Admin", email, password, rol: "super_admin" });
+  await Usuario.create({
+    nombre: "Super Admin",
+    email,
+    password,
+    rol: "super_admin",
+  });
   logger.success(`Super admin creado: ${email}`);
 }
 
@@ -87,7 +108,7 @@ connectDB()
       logger.info(
         `Entorno: ${process.env["NODE_ENV"] ?? "development"} · LOG_LEVEL: ${
           process.env["LOG_LEVEL"] ?? "(auto)"
-        }`
+        }`,
       );
     });
   })

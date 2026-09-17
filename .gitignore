@@ -2,10 +2,31 @@ node_modules/
 
 # Build de TypeScript
 dist/
+*.tsbuildinfo
 
-# Configuración local con secretos reales
+# Configuración local con secretos reales (.env.example sí se sube)
 .env
-.env.local
+.env.*
+!.env.example
 
-# Log que deja run.sh
+# Logs (incluye el .run.log que deja run.sh)
 .run.log
+*.log
+logs/
+
+# Documentación interna: notas de trabajo, no hacen falta en el repo
+doc/
+
+# Editores e IDEs
+.vscode/
+.idea/
+.claude/
+*.swp
+*~
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Respaldos que deja scripts/reiniciar-datos.mjs (datos reales: no se suben)
+respaldos/
