@@ -51,6 +51,40 @@ export async function requireAuth(
 }
 
 /**
+ * Como requireAuth, pero la sesión es opcional: si el token sirve deja
+ * req.usuario, y si no sigue como anónimo. Nunca responde 401.
+ *
+ * Es para POST /app/errores (K12): el reporte de un error de la app tiene que
+ * llegar igual con la sesión vencida o rota, que es justo cuando más falla.
+ * Un 401 ahí además haría que el front cierre la sesión por un reporte.
+ */
+export async function autenticacionOpcional(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authHeader = req.headers.authorization;
+    const secreto = process.env["JWT_SECRET"];
+
+    if (authHeader?.startsWith("Bearer ") && secreto) {
+      const token = authHeader.slice("Bearer ".length);
+      const payload = jwt.verify(token, secreto) as PayloadToken;
+
+      const usuario = await Usuario.findById(payload.id).select("+passwordCambiadoEn");
+      const sigueValiendo =
+        usuario !== null &&
+        (payload.iat === undefined || !usuario.passwordCambioDespuesDelToken(payload.iat));
+
+      if (usuario && sigueValiendo) req.usuario = usuario;
+    }
+  } catch {
+    // Token roto o vencido, id inválido, base caída: se sigue como anónimo.
+  }
+  next();
+}
+
+/**
  * Restringe una ruta a ciertos roles. Va siempre después de requireAuth.
  *
  *   router.use(requireAuth, requireRol("super_admin"));

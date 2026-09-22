@@ -3,10 +3,11 @@ import Factura, { ESTADOS_FACTURA, type EstadoFactura } from "../models/Factura.
 import Cliente from "../models/Cliente.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireMarca } from "../middleware/marca.js";
-import { rateLimit } from "../middleware/rateLimit.js";
+import { porMarca, rateLimit } from "../middleware/rateLimit.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { AppError, datosInvalidos, noEncontrado } from "../utils/AppError.js";
+import { AppError, datosInvalidos, errorDeCampo, noEncontrado } from "../utils/AppError.js";
 import { enviarEmail, smtpConfigurado } from "../utils/email.js";
+import { enmascararEmail, logger } from "../utils/logger.js";
 import { enviarPdf } from "../utils/respuestaPdf.js";
 import { EMAIL_VALIDO, patronDeTexto } from "../utils/validaciones.js";
 import { enlaceWhatsApp, normalizarTelefonoAR } from "../utils/whatsapp.js";
@@ -211,9 +212,25 @@ router.get(
 //
 // Va al email del cliente, o al que venga en el body (que no se guarda: para
 // cambiarle el email al cliente está PUT /clientes/:id).
+//
+// Los límites cuentan por marca y no por IP: detrás del proxy la IP no
+// identifica al negocio (varios dueños, o varios negocios detrás del mismo
+// CGNAT). El tope diario frena que la cuenta se use como relay para mandar
+// mails a cualquiera desde el remitente de la app (S5).
 router.post(
   "/:id/enviar",
-  rateLimit({ nombre: "enviar-factura", maximo: 20, ventanaMs: 60 * 60 * 1000 }),
+  rateLimit({
+    nombre: "enviar-factura",
+    maximo: 20,
+    ventanaMs: 60 * 60 * 1000,
+    clave: porMarca,
+  }),
+  rateLimit({
+    nombre: "enviar-factura-dia",
+    maximo: 100,
+    ventanaMs: 24 * 60 * 60 * 1000,
+    clave: porMarca,
+  }),
   asyncHandler<RequestConMarca>(async (req, res) => {
     const factura = await facturaPropia(req);
     if (factura.estado === "anulada") throw datosInvalidos("No se puede enviar una factura anulada");
@@ -225,18 +242,18 @@ router.post(
       typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const para = emailDelBody || cliente.email;
     if (!para) {
-      throw datosInvalidos(
-        "Este cliente no tiene email cargado. Cargáselo o escribí uno para mandarlo.",
-        { campo: "email" }
+      throw errorDeCampo(
+        "email",
+        "Este cliente no tiene email cargado. Cargáselo o escribí uno para mandarlo."
       );
     }
     if (!EMAIL_VALIDO.test(para)) {
-      throw datosInvalidos("El email no tiene un formato válido", { campo: "email" });
+      throw errorDeCampo("email", "El email no tiene un formato válido");
     }
 
     const mensaje = typeof req.body?.mensaje === "string" ? req.body.mensaje.trim() : "";
     if (mensaje.length > 500) {
-      throw datosInvalidos("El mensaje puede tener hasta 500 caracteres", { campo: "mensaje" });
+      throw errorDeCampo("mensaje", "El mensaje puede tener hasta 500 caracteres");
     }
 
     const { buffer, nombreArchivo, datos, logo } = await generarPdfFactura(factura, { cliente });
@@ -273,12 +290,20 @@ router.post(
       if (!smtpConfigurado()) {
         throw new AppError("El envío de mails no está configurado en el servidor", 503);
       }
+      // Sin el motivo SMTP (P11): ya queda en el log de email.ts, y al
+      // cliente no le sirve y le muestra cómo está armada la infraestructura.
       throw new AppError(
         "No se pudo enviar el mail. Probá de nuevo o compartila por WhatsApp.",
-        502,
-        { motivo: envio.motivo }
+        502
       );
     }
+
+    // Rastro de quién mandó qué y a dónde, por si la cuenta se usa como relay.
+    logger.info(
+      `[mail-factura] marca ${String(req.marca._id)} → ${enmascararEmail(para)}${
+        emailDelBody && emailDelBody !== cliente.email ? " (email escrito a mano)" : ""
+      }`
+    );
 
     res.json({ enviado: true, para, asunto: mail.asunto, archivo: nombreArchivo });
   })
@@ -294,9 +319,10 @@ router.post(
     const crudo = req.body?.diasValidez;
     const dias = crudo === undefined || crudo === null ? DIAS_VALIDEZ_POR_DEFECTO : Number(crudo);
     if (!Number.isInteger(dias) || dias < 1 || dias > 30) {
-      throw datosInvalidos("Los días de validez tienen que ser un número entero entre 1 y 30", {
-        diasValidez: crudo,
-      });
+      throw errorDeCampo(
+        "diasValidez",
+        "Los días de validez tienen que ser un número entero entre 1 y 30"
+      );
     }
 
     const factura = await facturaPropia(req);

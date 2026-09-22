@@ -100,7 +100,8 @@ const NOMBRE_METODO: Record<MetodoPago, string> = {
 };
 
 const menos = (monto: number): string => `− ${formatearPesos(monto)}`;
-const plural = (n: number, uno: string, varios: string): string => (n === 1 ? uno : varios);
+const plural = (n: number, uno: string, varios: string): string =>
+  n === 1 ? uno : varios;
 
 /** El rótulo de estado: color y texto según cómo está la cuenta. */
 function insignia(f: DatosPdfFactura["factura"], hoy: Date, p: PaletaPdf) {
@@ -109,7 +110,12 @@ function insignia(f: DatosPdfFactura["factura"], hoy: Date, p: PaletaPdf) {
   const cuantos = `${dias} ${plural(dias, "DÍA", "DÍAS")}`;
 
   if (f.estado === "anulada") {
-    return { texto: "ANULADA", fondo: color.borde, tinta: color.textoSuave, borde: color.borde };
+    return {
+      texto: "ANULADA",
+      fondo: color.borde,
+      tinta: color.textoSuave,
+      borde: color.borde,
+    };
   }
   if (f.estado === "pagada") {
     return {
@@ -120,18 +126,29 @@ function insignia(f: DatosPdfFactura["factura"], hoy: Date, p: PaletaPdf) {
     };
   }
   if (f.saldo <= 0) {
-    return { texto: "AL DÍA", fondo: color.blanco, tinta: p.secundario, borde: p.borde };
+    return {
+      texto: "AL DÍA",
+      fondo: color.blanco,
+      tinta: p.secundario,
+      borde: p.borde,
+    };
   }
   if (f.vencida) {
     return {
-      texto: dias === 0 ? "VENCIÓ HOY" : `VENCIÓ EL ${formatearFechaCorta(f.venceEl)} · HACE ${cuantos}`,
+      texto:
+        dias === 0
+          ? "VENCIÓ HOY"
+          : `VENCIÓ EL ${formatearFechaCorta(f.venceEl)} · HACE ${cuantos}`,
       fondo: color.ambarFondo,
       tinta: color.ambar,
       borde: color.ambarBorde,
     };
   }
   return {
-    texto: dias === 0 ? "VENCE HOY" : `VENCE EL ${formatearFecha(f.venceEl)} · EN ${cuantos}`,
+    texto:
+      dias === 0
+        ? "VENCE HOY"
+        : `VENCE EL ${formatearFecha(f.venceEl)} · EN ${cuantos}`,
     fondo: color.blanco,
     tinta: p.secundario,
     borde: p.borde,
@@ -141,10 +158,19 @@ function insignia(f: DatosPdfFactura["factura"], hoy: Date, p: PaletaPdf) {
 /** La marca: nombre y datos a la izquierda, su logo a la derecha si tiene. */
 function cabecera(d: DatosPdfFactura, p: PaletaPdf): Content {
   const lineas: Content[] = [
-    { text: d.marca.nombre, font: "InterSemi", fontSize: 18, color: p.primario },
+    {
+      text: d.marca.nombre,
+      font: "InterSemi",
+      fontSize: 18,
+      color: p.primario,
+    },
   ];
   if (d.marca.direccion) {
-    lineas.push({ text: d.marca.direccion, color: color.textoSuave, margin: [0, 4, 0, 0] });
+    lineas.push({
+      text: d.marca.direccion,
+      color: color.textoSuave,
+      margin: [0, 4, 0, 0],
+    });
   }
   if (d.marca.telefono) {
     lineas.push({ text: `Tel. ${d.marca.telefono}`, color: color.textoSuave });
@@ -165,7 +191,8 @@ function cabecera(d: DatosPdfFactura, p: PaletaPdf): Content {
 function subtitulo(f: DatosPdfFactura["factura"]): string {
   const numero = numeroFactura(f.numero);
   if (!numero) return `Factura en curso · desde el ${formatearFecha(f.desde)}`;
-  if (f.pagadaEl) return `Factura ${numero} · saldada el ${formatearFecha(f.pagadaEl)}`;
+  if (f.pagadaEl)
+    return `Factura ${numero} · saldada el ${formatearFecha(f.pagadaEl)}`;
   return `Factura ${numero}`;
 }
 
@@ -174,16 +201,29 @@ function heroe(d: DatosPdfFactura, p: PaletaPdf): Content {
   const f = d.factura;
   const estado = insignia(f, d.generadoEl, p);
 
-  const contacto = [`DNI ${d.cliente.dni}`, d.cliente.telefono && `Tel. ${d.cliente.telefono}`]
+  const contacto = [
+    `DNI ${d.cliente.dni}`,
+    d.cliente.telefono && `Tel. ${d.cliente.telefono}`,
+  ]
     .filter(Boolean)
     .join(" · ");
 
   const izquierda: Content[] = [
-    { text: d.cliente.nombre, font: "InterSemi", fontSize: 13, color: color.tinta },
+    {
+      text: d.cliente.nombre,
+      font: "InterSemi",
+      fontSize: 13,
+      color: color.tinta,
+    },
     { text: contacto, color: color.textoSuave, margin: [0, 2, 0, 0] },
   ];
-  if (d.cliente.direccion) izquierda.push({ text: d.cliente.direccion, color: color.textoSuave });
-  izquierda.push({ text: subtitulo(f), color: color.textoSuave, margin: [0, 8, 0, 0] });
+  if (d.cliente.direccion)
+    izquierda.push({ text: d.cliente.direccion, color: color.textoSuave });
+  izquierda.push({
+    text: subtitulo(f),
+    color: color.textoSuave,
+    margin: [0, 8, 0, 0],
+  });
 
   const derecha: Content[] = [
     {
@@ -248,12 +288,33 @@ function heroe(d: DatosPdfFactura, p: PaletaPdf): Content {
 
   // La barra solo tiene sentido si hubo algo anotado.
   if (f.totalFiado > 0) {
-    const relleno = (ANCHO_BARRA * Math.min(Math.max(f.porcentajeCobrado, 0), 100)) / 100;
+    const relleno =
+      (ANCHO_BARRA * Math.min(Math.max(f.porcentajeCobrado, 0), 100)) / 100;
     cuerpo.push({
       canvas: [
-        { type: "rect", x: 0, y: 0, w: ANCHO_BARRA, h: 5, r: 2.5, color: color.blanco, lineColor: p.borde, lineWidth: 0.6 },
+        {
+          type: "rect",
+          x: 0,
+          y: 0,
+          w: ANCHO_BARRA,
+          h: 5,
+          r: 2.5,
+          color: color.blanco,
+          lineColor: p.borde,
+          lineWidth: 0.6,
+        },
         ...(relleno > 0
-          ? [{ type: "rect" as const, x: 0, y: 0, w: relleno, h: 5, r: 2.5, color: p.relleno }]
+          ? [
+              {
+                type: "rect" as const,
+                x: 0,
+                y: 0,
+                w: relleno,
+                h: 5,
+                r: 2.5,
+                color: p.relleno,
+              },
+            ]
           : []),
       ],
       margin: [0, 14, 0, 5],
@@ -298,8 +359,16 @@ function movimientos(d: DatosPdfFactura): Movimiento[] {
   const compras: Movimiento[] = d.tickets.map((t) => {
     const renglones: Content[] = t.items.map((i) => ({
       columns: [
-        { width: "*", text: `${i.cantidad} × ${i.nombre}${i.talle ? ` · T. ${i.talle}` : ""}` },
-        { width: "auto", text: formatearPesos(i.subtotal), color: color.textoTenue, fontSize: 8 },
+        {
+          width: "*",
+          text: `${i.cantidad} × ${i.nombre}${i.talle ? ` · T. ${i.talle}` : ""}`,
+        },
+        {
+          width: "auto",
+          text: formatearPesos(i.subtotal),
+          color: color.textoTenue,
+          fontSize: 8,
+        },
       ],
       columnGap: 8,
     }));
@@ -313,19 +382,27 @@ function movimientos(d: DatosPdfFactura): Movimiento[] {
       });
     }
 
-    return { fecha: t.fecha, orden: 0, tipo: "Compra", detalle: { stack: renglones }, suma: t.faltante };
+    return {
+      fecha: t.fecha,
+      orden: 0,
+      tipo: "Compra",
+      detalle: { stack: renglones },
+      suma: t.faltante,
+    };
   });
 
   const pagos: Movimiento[] = d.pagos.map((p) => ({
     fecha: p.fecha,
     orden: 1,
     tipo: "Pago",
-    detalle: { text: `Pago a cuenta · ${NOMBRE_METODO[p.metodoPago] ?? "Otro"}` },
+    detalle: {
+      text: `Pago a cuenta · ${NOMBRE_METODO[p.metodoPago] ?? "Otro"}`,
+    },
     resta: p.monto,
   }));
 
   return [...compras, ...pagos].sort(
-    (a, b) => a.fecha.getTime() - b.fecha.getTime() || a.orden - b.orden
+    (a, b) => a.fecha.getTime() - b.fecha.getTime() || a.orden - b.orden,
   );
 }
 
@@ -345,7 +422,10 @@ function tablaMovimientos(d: DatosPdfFactura, p: PaletaPdf): Content {
   if (lista.length === 0) {
     return [
       titulo,
-      { text: "Todavía no hay compras ni pagos en esta factura.", color: color.textoSuave },
+      {
+        text: "Todavía no hay compras ni pagos en esta factura.",
+        color: color.textoSuave,
+      },
     ];
   }
 
@@ -380,7 +460,8 @@ function tablaMovimientos(d: DatosPdfFactura, p: PaletaPdf): Content {
       },
       m.detalle,
       {
-        text: m.suma === undefined ? "" : m.suma > 0 ? formatearPesos(m.suma) : "—",
+        text:
+          m.suma === undefined ? "" : m.suma > 0 ? formatearPesos(m.suma) : "—",
         alignment: "right",
       },
       {
@@ -396,9 +477,26 @@ function tablaMovimientos(d: DatosPdfFactura, p: PaletaPdf): Content {
   cuerpo.push([
     { text: "" },
     { text: f.saldo > 0 ? "Saldo a pagar" : "Saldo", bold: true, fontSize: 10 },
-    { text: formatearPesos(f.totalFiado), bold: true, fontSize: 10, alignment: "right" },
-    { text: menos(f.totalPagos), bold: true, fontSize: 10, alignment: "right", color: p.secundario },
-    { text: formatearPesos(f.saldo), bold: true, fontSize: 10, alignment: "right", color: p.primario },
+    {
+      text: formatearPesos(f.totalFiado),
+      bold: true,
+      fontSize: 10,
+      alignment: "right",
+    },
+    {
+      text: menos(f.totalPagos),
+      bold: true,
+      fontSize: 10,
+      alignment: "right",
+      color: p.secundario,
+    },
+    {
+      text: formatearPesos(f.saldo),
+      bold: true,
+      fontSize: 10,
+      alignment: "right",
+      color: p.primario,
+    },
   ]);
 
   const ultima = cuerpo.length - 1;
@@ -452,17 +550,35 @@ export function documentoFactura(d: DatosPdfFactura): TDocumentDefinitions {
       subject: "Resumen de cuenta",
       creator: d.marca.nombre,
     },
-    defaultStyle: { font: "Inter", fontSize: 9, color: color.tinta, lineHeight: 1.15 },
+    defaultStyle: {
+      font: "Inter",
+      fontSize: 9,
+      color: color.tinta,
+      lineHeight: 1.15,
+    },
     ...(d.factura.estado === "anulada" && {
-      watermark: { text: "ANULADA", color: color.textoTenue, opacity: 0.12, bold: true },
+      watermark: {
+        text: "ANULADA",
+        color: color.textoTenue,
+        opacity: 0.12,
+        bold: true,
+      },
     }),
     content: [cabecera(d, p), heroe(d, p), tablaMovimientos(d, p)],
     footer: (pagina: number, total: number): Content => ({
       columns: [
         // Sin marca de la app: el PDF es del usuario, de punta a punta.
         { width: "*", text: `Generado el ${generado}` },
-        { width: "auto", text: "Documento no válido como factura", alignment: "center" },
-        { width: "*", text: `Página ${pagina} de ${total}`, alignment: "right" },
+        {
+          width: "auto",
+          text: "Documento no válido como factura",
+          alignment: "center",
+        },
+        {
+          width: "*",
+          text: `Página ${pagina} de ${total}`,
+          alignment: "right",
+        },
       ],
       margin: [40, 18, 40, 0],
       fontSize: 7.5,

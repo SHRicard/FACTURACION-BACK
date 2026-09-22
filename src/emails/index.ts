@@ -25,7 +25,7 @@ export interface Adjunto {
   cid?: string;
 }
 
-export const rutaLogo = rutaAsset("logo-morgana-640.png");
+export const rutaLogo = rutaAsset("icono-app-144.png");
 
 /**
  * El logo va adjunto y embebido, no como URL: los assets no están publicados
@@ -34,7 +34,7 @@ export const rutaLogo = rutaAsset("logo-morgana-640.png");
  * remitentes nuevos.
  */
 export const adjuntoLogo = (): Adjunto => ({
-  filename: "morgana.png",
+  filename: "logo.png",
   path: rutaLogo,
   cid: CID_LOGO,
 });
@@ -43,4 +43,5 @@ export { CID_LOGO } from "./layout.js";
 export { bienvenida, type DatosBienvenida } from "./plantillas/bienvenida.js";
 export { recuperarPassword, type DatosRecuperar } from "./plantillas/recuperarPassword.js";
 export { passwordCambiado, type DatosPasswordCambiado } from "./plantillas/passwordCambiado.js";
+export { cuentaVinculada, type DatosCuentaVinculada } from "./plantillas/cuentaVinculada.js";
 export { facturaCliente, type DatosFacturaCliente } from "./plantillas/facturaCliente.js";

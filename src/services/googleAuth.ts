@@ -1,14 +1,14 @@
 import Usuario, { type UsuarioDocument } from "../models/Usuario.js";
-import { datosInvalidos, noAutorizado } from "../utils/AppError.js";
+import { errorDeCampo, noAutorizado } from "../utils/AppError.js";
 import { ROL_POR_DEFECTO } from "../config/roles.js";
-import { logger } from "../utils/logger.js";
+import { enmascararEmail, logger } from "../utils/logger.js";
 import type { PerfilGoogle } from "../utils/google.js";
 import { VERSION_DOCUMENTOS_LEGALES } from "../legal/documentos.js";
 
 /** Qué pasó al resolver la cuenta. El caller decide qué hacer con cada caso. */
 export type ResultadoGoogle =
   | { usuario: UsuarioDocument; caso: "existente" }
-  | { usuario: UsuarioDocument; caso: "vinculada" }
+  | { usuario: UsuarioDocument; caso: "vinculada"; teniaPassword: boolean }
   | { usuario: UsuarioDocument; caso: "creada" };
 
 /**
@@ -27,7 +27,11 @@ export async function resolverUsuarioGoogle(
   if (porGoogleId) return { usuario: porGoogleId, caso: "existente" };
 
   // 2) Hay una cuenta local con ese email: la vinculamos.
-  const porEmail = await Usuario.findOne({ email: perfil.email });
+  // password y passwordCambiadoEn tienen select:false; hacen falta para
+  // saber si tenía contraseña y para cerrar sus sesiones.
+  const porEmail = await Usuario.findOne({ email: perfil.email }).select(
+    "+password +passwordCambiadoEn",
+  );
   if (porEmail) {
     // Solo si Google confirma que el email está verificado. Si no, alguien
     // podría crear una cuenta de Google con un email ajeno y quedarse con la
@@ -40,10 +44,35 @@ export async function resolverUsuarioGoogle(
 
     porEmail.googleId = perfil.googleId;
     if (!porEmail.avatar && perfil.avatar) porEmail.avatar = perfil.avatar;
+
+    // Pre-secuestro: alguien pudo registrarse ANTES con este email (que no es
+    // suyo) y una contraseña suya, y esperar a que la dueña real entre con
+    // Google. Si la contraseña sobreviviera a la vinculación, esa persona
+    // seguiría entrando a la cuenta. Por eso se borra la contraseña y el token
+    // de reseteo que hubiera, y se cierran las sesiones abiertas; la ruta le
+    // manda un mail de aviso a la dueña del email.
+    const teniaPassword = Boolean(porEmail.password);
+    if (teniaPassword) {
+      porEmail.set("password", undefined);
+      porEmail.set("resetPasswordToken", undefined);
+      porEmail.set("resetPasswordExpira", undefined);
+      // A mano, porque el pre('save') de Usuario.ts solo lo toca cuando se
+      // guarda una contraseña nueva, no cuando queda vacía. El `required` de
+      // password no molesta: ya hay googleId.
+      //
+      // 1 s para atrás: requireAuth compara passwordCambiadoEn contra el iat
+      // del JWT, que va en segundos. Así el token que se emite en esta misma
+      // respuesta sigue valiendo y todos los anteriores no.
+      porEmail.passwordCambiadoEn = new Date(Date.now() - 1000);
+    }
     await porEmail.save();
 
-    logger.info(`Cuenta local vinculada con Google: ${porEmail.email}`);
-    return { usuario: porEmail, caso: "vinculada" };
+    logger.info(
+      `Cuenta local vinculada con Google: ${enmascararEmail(porEmail.email)}${
+        teniaPassword ? " (se borró la contraseña anterior)" : ""
+      }`,
+    );
+    return { usuario: porEmail, caso: "vinculada", teniaPassword };
   }
 
   // 3) No existe: cuenta nueva. Igual que el registro, siempre administrador.
@@ -55,9 +84,9 @@ export async function resolverUsuarioGoogle(
   }
 
   if (!aceptaTerminos) {
-    throw datosInvalidos(
+    throw errorDeCampo(
+      "aceptoTerminosYCondiciones",
       "Tenés que aceptar los términos y condiciones y la política de privacidad",
-      { campo: "aceptoTerminosYCondiciones" },
     );
   }
 
@@ -77,6 +106,6 @@ export async function resolverUsuarioGoogle(
     ...(perfil.avatar ? { avatar: perfil.avatar } : {}),
   });
 
-  logger.success(`Cuenta nueva con Google: ${usuario.email}`);
+  logger.success(`Cuenta nueva con Google: ${enmascararEmail(usuario.email)}`);
   return { usuario, caso: "creada" };
 }

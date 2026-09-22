@@ -14,6 +14,12 @@ import mongoose, { Schema, type HydratedDocument, type Types } from "mongoose";
 export const METODOS_PAGO = ["efectivo", "transferencia", "mercadopago", "otro"] as const;
 export type MetodoPago = (typeof METODOS_PAGO)[number];
 
+/**
+ * Tope de un pago. Lo valida services/pagos.ts y el formulario del front lo
+ * repite en pagos/schemas.ts.
+ */
+export const MONTO_MAXIMO_PAGO = 1_000_000_000;
+
 export interface PagoAtributos {
   /** A qué factura se imputa. */
   factura: Types.ObjectId;
@@ -41,6 +47,13 @@ export interface PagoAtributos {
   saldoPosterior?: number;
 
   registradoPor?: Types.ObjectId;
+
+  /**
+   * La clave de Idempotency-Key y la huella del pedido (ver
+   * utils/idempotencia.ts). Se repiten en cada renglón de la entrega.
+   */
+  claveIdempotencia?: string;
+  huellaIdempotencia?: string;
 
   /** Baja lógica, mismo criterio que el ticket: se tacha, no se borra. */
   anulado: boolean;
@@ -83,6 +96,9 @@ const pagoSchema = new Schema<PagoAtributos>(
 
     registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario" },
 
+    claveIdempotencia: { type: String },
+    huellaIdempotencia: { type: String },
+
     anulado: { type: Boolean, default: false },
     anuladoEl: { type: Date },
     motivoAnulacion: { type: String, trim: true },
@@ -90,13 +106,24 @@ const pagoSchema = new Schema<PagoAtributos>(
   { timestamps: true }
 );
 
-// El front necesita saber si fue completo o parcial sin comparar saldos.
+// El front necesita saber si fue completo o parcial sin comparar saldos. La
+// clave y la huella de idempotencia son internas: no viajan.
 pagoSchema.set("toJSON", {
-  transform: (_doc, ret) => ({ ...ret, tipo: tipoDePago(ret) }),
+  transform: (_doc, ret) => {
+    const { claveIdempotencia: _clave, huellaIdempotencia: _huella, ...visible } = ret;
+    return { ...visible, tipo: tipoDePago(visible) };
+  },
 });
 
 pagoSchema.index({ factura: 1, fecha: 1 });
 pagoSchema.index({ cliente: 1, fecha: -1 });
 pagoSchema.index({ entrega: 1 });
+// Idempotencia de los cobros. La factura va en el índice porque una misma
+// entrega puede tener un renglón por factura, todos con la misma clave.
+// Parcial para que los pagos sin clave no choquen entre sí.
+pagoSchema.index(
+  { marca: 1, claveIdempotencia: 1, factura: 1 },
+  { unique: true, partialFilterExpression: { claveIdempotencia: { $type: "string" } } }
+);
 
 export default mongoose.model<PagoAtributos>("Pago", pagoSchema);

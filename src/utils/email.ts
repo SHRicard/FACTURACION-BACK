@@ -1,5 +1,5 @@
 import nodemailer, { type Transporter } from "nodemailer";
-import { logger } from "./logger.js";
+import { enmascararEmail, logger } from "./logger.js";
 import type { Adjunto } from "../emails/index.js";
 
 // Envío de mails.
@@ -94,12 +94,18 @@ function obtenerTransport(): Transporter {
 
   const { host, port, secure, user, pass, rejectUnauthorized } = configMail();
 
+  // Timeouts explícitos: sin esto rigen los de nodemailer (2 min para
+  // conectar, 10 min de socket), y con un SMTP colgado POST
+  // /facturas/:id/enviar queda esperando todo ese tiempo.
   transportCacheado = nodemailer.createTransport({
     host,
     port,
     secure,
     auth: { user: user as string, pass: pass as string },
     tls: { rejectUnauthorized },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 
   return transportCacheado;
@@ -165,12 +171,12 @@ export async function enviarEmail({
       ...(responderA ? { replyTo: responderA } : {}),
       ...(adjuntos?.length ? { attachments: adjuntos } : {}),
     });
-    logger.info(`📧 Email enviado a ${para} (${info.messageId})`);
+    logger.info(`📧 Email enviado a ${enmascararEmail(para)} (${info.messageId})`);
     return { enviado: true, messageId: info.messageId };
   } catch (error) {
     // No propagamos: que falle el mail no tiene que romper la request. El
     // usuario ve el mensaje genérico y nosotros vemos el error en la consola.
-    logger.error(`No se pudo enviar el email a ${para}:`);
+    logger.error(`No se pudo enviar el email a ${enmascararEmail(para)}:`);
     logger.error(error);
     return { enviado: false, motivo: error instanceof Error ? error.message : String(error) };
   }

@@ -1,12 +1,23 @@
 import { color, fuente, medida } from "./tokens.js";
 import { escaparHtml, fileteMarca, preheader } from "./componentes.js";
+import { NOMBRE_APLICACION } from "../legal/documentos.js";
+
+/**
+ * El nombre de la app en los mails: el mismo de la ficha de Play y de los
+ * documentos legales (APP_NAME). Un mail con otro nombre que el de la app que
+ * la persona instaló se lee como phishing.
+ */
+export const NOMBRE_APP = NOMBRE_APLICACION;
+
+/** Firma de los mails de la app, igual en el HTML y en el texto plano. */
+export const FIRMA_APP = `${NOMBRE_APP} · Cuentas corrientes de tu negocio`;
 
 /**
  * El logo se manda adjunto y se referencia con cid:, no con una URL. Así se ve
  * aunque el proyecto no tenga los assets publicados en ningún lado, que es el
  * caso hoy. Si algún día hay CDN, alcanza con cambiar el src por la URL.
  */
-export const CID_LOGO = "logo-morgana";
+export const CID_LOGO = "logo-app";
 
 export interface OpcionesLayout {
   /** Texto de vista previa, el que se lee en la bandeja al lado del asunto. */
@@ -27,11 +38,16 @@ export interface OpcionesLayout {
 export const CID_LOGO_MARCA = "logo-marca";
 
 export function layout({ vistaPrevia, contenido, pie, marca }: OpcionesLayout): string {
-  const nombre = marca ? escaparHtml(marca.nombre) : "Morgana";
+  const nombreApp = escaparHtml(NOMBRE_APP);
+  const nombre = marca ? escaparHtml(marca.nombre) : nombreApp;
 
+  // El ícono de la app con el nombre en texto debajo. El alt va vacío porque
+  // el nombre ya se lee abajo: un lector de pantalla no lo dice dos veces, y
+  // si el cliente no muestra la imagen el nombre sigue ahí.
   const cabecera = !marca
-    ? `<img src="cid:${CID_LOGO}" width="220" height="80" alt="Morgana"
-                   style="display:block;width:220px;height:80px;max-width:220px;" />`
+    ? `<img src="cid:${CID_LOGO}" width="72" height="72" alt=""
+                   style="display:block;width:72px;height:72px;max-width:72px;margin:0 auto;" />
+              <p style="margin:12px 0 0;font-family:${fuente.texto};font-size:22px;line-height:28px;font-weight:700;color:${color.tinta};">${nombreApp}</p>`
     : marca.cidLogo
       ? `<img src="cid:${marca.cidLogo}" width="180" alt="${nombre}"
                    style="display:block;width:180px;max-width:180px;height:auto;" />`
@@ -42,14 +58,14 @@ export function layout({ vistaPrevia, contenido, pie, marca }: OpcionesLayout): 
     ? ""
     : `<p style="margin:0;">
                       Este mail se envió automáticamente desde tu cuenta de
-                      <strong style="color:${color.violetaPrimario};font-weight:600;">Morgana</strong>.
+                      <strong style="color:${color.violetaPrimario};font-weight:600;">${nombreApp}</strong>.
                       No hace falta que lo respondas.
                     </p>`;
 
   const firma = marca
     ? ""
     : `<p style="margin:20px 0 0;font-family:${fuente.texto};font-size:12px;line-height:18px;color:${color.textoTenue};">
-          Morgana · Gestión de cuentas corrientes
+          ${escaparHtml(FIRMA_APP)}
         </p>`;
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
