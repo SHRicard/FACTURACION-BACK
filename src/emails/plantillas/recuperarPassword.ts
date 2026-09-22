@@ -9,17 +9,36 @@ export interface DatosRecuperar {
   url: string;
   /** Cuántos minutos vive el link. */
   minutos: number;
+  /** La cuenta no tiene contraseña: entra con Google. */
+  usaGoogle?: boolean;
 }
 
-export function recuperarPassword({ nombre, url, minutos }: DatosRecuperar): Plantilla {
+export function recuperarPassword({
+  nombre,
+  url,
+  minutos,
+  usaGoogle = false,
+}: DatosRecuperar): Plantilla {
   const vistaPrevia = `Elegí una contraseña nueva. El link vence en ${minutos} minutos.`;
+
+  // El login ya no dice "esta cuenta usa Google" (no revela qué emails usan la
+  // app, K14): la pista llega acá, al mail de la persona.
+  const indicacion = usaGoogle
+    ? "Tu cuenta entra con Google: podés seguir entrando con «Continuar con Google». Si además querés una contraseña, elegila con este link."
+    : "Tocá el botón: se abre una página donde elegís la contraseña nueva. Después volvés a la app y entrás con ella.";
+
+  // Una cuenta de Google no tiene "contraseña actual": el cierre no puede
+  // decir que sigue funcionando.
+  const siNoFuisteVos = usaGoogle
+    ? "Si no pediste esto, ignorá este mail: tu cuenta sigue igual y nadie puede ponerle una contraseña sin este link."
+    : "Si no pediste este cambio, podés ignorar este mail: tu contraseña actual sigue funcionando y nadie puede cambiarla sin este link.";
 
   const contenido = `
     ${titulo("Recuperá tu contraseña")}
 
     ${parrafo(
       `Hola ${nombre}. Recibimos un pedido para cambiar la contraseña de tu cuenta.
-       Tocá el botón y elegí una nueva.`
+       ${indicacion}`
     )}
 
     ${boton(url, "Elegir contraseña nueva")}
@@ -32,11 +51,7 @@ export function recuperarPassword({ nombre, url, minutos }: DatosRecuperar): Pla
 
     ${urlDeRespaldo(url)}
 
-    ${parrafo(
-      `Si no pediste este cambio, podés ignorar este mail: tu contraseña actual
-       sigue funcionando y nadie puede cambiarla sin este link.`,
-      `font-size:14px;line-height:22px;color:${color.textoTenue};`
-    )}
+    ${parrafo(siNoFuisteVos, `font-size:14px;line-height:22px;color:${color.textoTenue};`)}
   `;
 
   return {
@@ -51,7 +66,8 @@ export function recuperarPassword({ nombre, url, minutos }: DatosRecuperar): Pla
       `Hola ${nombre},`,
       "",
       "Recibimos un pedido para cambiar la contraseña de tu cuenta de Morgana.",
-      `Entrá a este link para elegir una nueva (vence en ${minutos} minutos y se usa una sola vez):`,
+      indicacion,
+      `El link vence en ${minutos} minutos y se usa una sola vez:`,
       "",
       `  ${url}`,
       "",

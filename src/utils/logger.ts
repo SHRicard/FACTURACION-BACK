@@ -3,6 +3,10 @@
 // El nivel se controla con LOG_LEVEL: debug | info | warn | error | silent
 // Si no está seteado: "debug" en desarrollo, "info" con NODE_ENV=production.
 //
+// Cada línea arranca con la marca de tiempo: en desarrollo, la hora local
+// (alcanza para seguir la consola); en producción, fecha y hora ISO en UTC,
+// porque los logs del hosting se leen días después y se ordenan por texto.
+//
 // Ojo: todo se lee de process.env en el momento de loguear, no al importar.
 // En ESM los imports se evalúan antes del dotenv.config() de server.ts, así que
 // leerlo arriba nos daría siempre undefined.
@@ -43,8 +47,11 @@ function nivelActual(): number {
 
 export const habilitado = (nivel: Nivel): boolean => NIVELES[nivel] >= nivelActual();
 
-function hora(): string {
+// En producción, ISO en UTC: trae la fecha, se ordena como texto y no depende
+// de la zona horaria que tenga el server del hosting.
+function marcaDeTiempo(): string {
   const ahora = new Date();
+  if (esProduccion()) return ahora.toISOString();
   return (
     ahora.toLocaleTimeString("es-AR", { hour12: false }) +
     "." +
@@ -65,7 +72,7 @@ const ETIQUETAS: Record<
 function escribir(nivel: NivelImprimible, args: unknown[]): void {
   if (!habilitado(nivel)) return;
   const { texto, color, salida } = ETIQUETAS[nivel];
-  salida(`${pintar(hora(), "gris")} ${pintar(texto, color)}`, ...args);
+  salida(`${pintar(marcaDeTiempo(), "gris")} ${pintar(texto, color)}`, ...args);
 }
 
 // Claves cuyo valor nunca queremos ver impreso en la consola.
@@ -82,6 +89,38 @@ export function sanitizar(valor: unknown, profundidad = 0): unknown {
     salida[clave] = CLAVES_SENSIBLES.test(clave) ? "***" : sanitizar(v, profundidad + 1);
   }
   return salida;
+}
+
+// En producción el email sale enmascarado ("a***@tienda.com"): los logs del
+// hosting los lee más gente y quedan guardados. En desarrollo va entero,
+// porque es lo que se usa para seguir una prueba.
+export function enmascararEmail(email: string): string {
+  if (!esProduccion()) return email;
+  const arroba = email.lastIndexOf("@");
+  if (arroba < 0) return "***";
+  return `${email.slice(0, 1)}***@${email.slice(arroba + 1)}`;
+}
+
+// Saca de un texto libre lo que puede identificar a alguien o abrir una
+// sesión. Lo usa POST /app/errores (K12) antes de guardar lo que manda la app:
+// un mensaje de error puede traer el email tipeado, un DNI o un token.
+// El orden importa: primero los tokens (un JWT tiene puntos y un hex largo
+// tiene dígitos), después emails y al final los números largos.
+export function redactar(texto: string): string {
+  return texto
+    .replace(/Bearer\s+[\w.~+\/=-]+/gi, "Bearer [token]")
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, "[token]")
+    // Hex de 32 o más: cubre el token de reseteo de contraseña.
+    .replace(/\b[0-9a-f]{32,}\b/gi, "[token]")
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
+    // DNI y teléfonos. La posición de un stack (":línea:columna") queda
+    // intacta: en un bundle de Hermes minificado todo está en la línea 1 y la
+    // columna pasa de 7 dígitos (index.android.bundle:1:1234567). Si se
+    // redactara se perdería dónde pasó, y errores de lugares distintos del
+    // bundle caerían en la misma huella de /app/errores.
+    .replace(/(:\d+:\d+)|\d{7,}/g, (_coincidencia, posicion: string | undefined) =>
+      posicion ?? "[numero]"
+    );
 }
 
 // Formatea un Error para imprimirlo completo: nombre, mensaje y stack.

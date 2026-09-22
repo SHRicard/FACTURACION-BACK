@@ -28,5 +28,5 @@ doc/
 .DS_Store
 Thumbs.db
 
-# Respaldos que deja scripts/reiniciar-datos.mjs (datos reales: no se suben)
+# Respaldos de mongodump (datos reales: no se suben)
 respaldos/

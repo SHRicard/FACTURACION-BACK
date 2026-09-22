@@ -16,5 +16,6 @@ export interface RequestConMarca extends RequestAutenticado {
 // Lo que el errorHandler deja en res.locals para que requestLogger lo imprima.
 export interface ErrorEnLocals {
   mensaje: string;
+  codigo?: string;
   detalles?: unknown;
 }

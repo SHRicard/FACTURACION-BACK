@@ -79,6 +79,15 @@ export interface FacturaAtributos {
    */
   versionEnlace?: number;
 
+  /**
+   * Contador de escrituras de los totales y del estado. No hay transacciones
+   * (Mongo standalone), así que recalcularFactura, saldarFactura y
+   * reabrirFactura escriben solo si nadie escribió desde que leyeron, y si no,
+   * vuelven a leer. Las facturas de antes no lo tienen guardado: para ellas
+   * vale 0.
+   */
+  revision: number;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -111,6 +120,7 @@ const facturaSchema = new Schema<FacturaAtributos>(
     cumplimiento: { type: Number, default: null },
 
     versionEnlace: { type: Number, default: 0 },
+    revision: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

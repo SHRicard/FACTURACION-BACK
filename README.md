@@ -51,9 +51,8 @@ va a resolver en tiempo de ejecución.
 | Comando | Qué hace |
 | --- | --- |
 | `node scripts/sembrar-especies.mjs <email>` | Carga la lista inicial de especies en la marca de ese dueño. Es idempotente: no duplica ni pisa |
-| `node scripts/reiniciar-datos.mjs --confirmar` | Hace un respaldo con `mongodump` en `respaldos/` y borra los datos del negocio. Los usuarios quedan. No corre con `NODE_ENV=production` |
 
-Para volver atrás un respaldo: `mongorestore --drop respaldos/<carpeta>`.
+Para restaurar un respaldo de mongodump: `mongorestore --drop respaldos/<carpeta>`.
 
 ## Configuración
 
@@ -63,6 +62,39 @@ Para volver atrás un respaldo: `mongorestore --drop respaldos/<carpeta>`.
    donde sale el link que abre el cliente) y las `CLOUDINARY_*` (el logo de cada
    marca). Las dos son opcionales en desarrollo: ver
    [doc/FACTURA_PDF.md](doc/FACTURA_PDF.md#variables-de-entorno).
+
+### En producción
+
+Con `NODE_ENV=production` el server revisa la configuración **antes de
+escuchar** y, si algo está mal, no arranca y lista lo que falta
+(`src/config/entorno.ts`). Un secreto de ejemplo no se nota al arrancar: se nota
+cuando alguien pide recuperar la contraseña y el mail no sale. No arranca si:
+
+- `JWT_SECRET` es el de ejemplo o tiene menos de 32 caracteres.
+- `SUPER_ADMIN_PASSWORD` es la de ejemplo o tiene menos de 12 caracteres.
+- `API_PUBLIC_URL` falta, no es `https` o apunta a `localhost`.
+- Falta el SMTP (`MAIL_HOST`, `MAIL_USER` y `MAIL_PASS`).
+- Falta `LEGAL_CONTACT_EMAIL`.
+
+En desarrollo lo mismo sale como aviso y el server arranca igual. En cualquier
+entorno cortan los valores mal escritos: `TRUST_PROXY` que no es un entero de 0
+a 5, `APP_VERSION_MINIMA` o `APP_VERSION_ULTIMA` sin la forma `1.2.0`,
+`APP_URL_TIENDA` sin `https://` y un `APP_SCHEME` inválido.
+
+**`TRUST_PROXY`** es la cantidad exacta de proxies delante del server (Render,
+Railway o Fly = 1; Cloudflare delante de otro = 2). Sin setear vale 1 en
+producción y 0 en desarrollo. Nunca `true`: con `true` cualquiera falsifica
+`X-Forwarded-For` y saltea el rate limit. Mal puesto, `req.ip` es la del proxy
+y toda la app comparte un único contador.
+
+**Healthcheck del hosting:** `GET /health`, sin auth. Responde 200
+`{ ok: true, mongo: "conectado", apagando: false }` si Mongo está conectado, y
+503 con la misma forma si no lo está o si el server se está apagando.
+
+**Apagado:** con `SIGTERM` (lo que manda el hosting en cada deploy) el server
+deja de aceptar conexiones, `/health` pasa a 503, termina las requests en curso
+(hasta 10 s; después las corta) y recién ahí cierra Mongo. Así un deploy no
+corta a la mitad un registro de pago.
 
 ## Correr el servidor
 
@@ -156,6 +188,12 @@ Los errores 4xx ocupan una línea. Los 5xx (bugs) imprimen el stack completo má
 los `params`, `query`, `body` y usuario de la request. Las claves que matcheen
 `password`, `token`, `secret`, `authorization` o `jwt` salen como `***`.
 
+Con `NODE_ENV=production` la hora sale en ISO con fecha y en UTC
+(`2026-09-21T20:40:30.123Z`), así el log del hosting se ordena y se busca por
+día, y los emails salen enmascarados (`a***@tienda.com`): el log del hosting lo
+lee más gente y queda guardado. En desarrollo siguen la hora corta y el email
+entero.
+
 ### Nivel de detalle
 
 `LOG_LEVEL` acepta `debug | info | warn | error | silent`. Por defecto es `debug`
@@ -164,17 +202,48 @@ de loguearse y solo quedan los errores).
 
 ### Códigos de respuesta
 
+Todos los errores tienen la misma forma:
+
+```ts
+{
+  error: string,          // el mensaje, listo para mostrar
+  codigo?: string,        // estable, en MAYÚSCULAS: solo cuando el front tiene que actuar distinto
+  detalles?: {
+    campos?: { [campo: string]: string },  // SOLO los mensajes por campo (la clave es el input)
+    ...datos                               // el resto son datos para la pantalla (deuda, pendiente…)
+  },
+  stack?: string[]        // solo en los 5xx y solo con NODE_ENV=development
+}
+```
+
 | Situación | Status | Body |
 | --- | --- | --- |
-| Validación de mongoose | 400 | `{ error: "Datos inválidos", detalles: { campo: "motivo" } }` |
+| Validación de mongoose | 400 | `{ error: "Datos inválidos", detalles: { campos: { campo: "motivo" } } }` |
+| Un campo del body mal (`errorDeCampo`) | 400 | `{ error, detalles: { campos: { dni: "motivo" } } }` |
+| Contraseña actual equivocada (`cambiar-password`) | 400 | `{ error, codigo: "CREDENCIALES_INVALIDAS", detalles: { campos: { passwordActual } } }` |
 | ObjectId mal formado | 400 | `{ error: 'El valor de "_id" no es válido' }` |
-| Índice único repetido | 409 | `{ error: "Ya existe un registro con ese email" }` |
+| Índice único repetido, de un campo | 409 | `{ error: "Ya existe un registro con ese email", detalles: { campos: { email: "…" } } }` |
+| Índice único compuesto | 409 | `{ error }`, sin `campos`: no hay un input al que culpar |
 | Token ausente/inválido/vencido | 401 | `{ error: "Token inválido" }` |
 | Falta DNI o marca | 403 | `{ error, detalles: { pendiente: "perfil" \| "marca" } }` |
 | Ruta inexistente | 404 | `{ error: "Ruta no encontrada: GET /x" }` |
+| App más vieja que `APP_VERSION_MINIMA` | 426 | `{ error, codigo: "APP_DESACTUALIZADA", detalles: { minima, urlTienda } }` |
+| Demasiados intentos | 429 | `{ error }` + header `Retry-After` en segundos |
 | Bug del servidor | 500 | `{ error: "Error interno del servidor", stack: [...] }` |
 
-El `stack` solo se manda al cliente en los 500 y fuera de producción.
+El `stack` solo se manda al cliente en los 5xx y solo con
+`NODE_ENV=development`, así un hosting sin `NODE_ENV` no expone rutas ni código.
+
+**401 es solo "la sesión no sirve"**: el front cierra la sesión ante cualquier
+401 de una ruta que no es pública. Por eso una contraseña mal tipeada con la
+sesión abierta (`cambiar-password`) responde 400 `CREDENCIALES_INVALIDAS`, y
+no 401.
+
+**426 `APP_DESACTUALIZADA`:** la app manda su versión en el header
+`X-App-Version`. Si es más vieja que `APP_VERSION_MINIMA`, cualquier ruta
+responde 426 y la app muestra "actualizá" con el link a la tienda. Sin el
+header, o con una versión que no se entiende, no se bloquea. Nunca se bloquean
+`/`, `/health`, `/app/*`, `/legal/*`, `/publico/*` ni `/cuenta/*`.
 
 ## Roles
 
@@ -398,7 +467,7 @@ Todos estos endpoints son públicos salvo los marcados con 🔒 (piden
 | POST | `/auth/recuperar-password` | `{ email }` | `{ mensaje }` |
 | GET | `/auth/recuperar-password/:token` | — | `{ valido, email }` |
 | POST | `/auth/resetear-password` | `{ token, password }` | `{ token, usuario }` |
-| POST | `/auth/cambiar-password` 🔒 | `{ passwordActual, passwordNueva }` | `{ token, usuario }` |
+| POST | `/auth/cambiar-password` 🔒 | `{ passwordActual, passwordNueva }` | `{ token, usuario }`. Contraseña actual mal: 400 `CREDENCIALES_INVALIDAS` (nunca 401). Cuenta de Google sin contraseña: 400 `CUENTA_SIN_PASSWORD` |
 | PUT | `/auth/me/perfil` 🔒 | `{ dni }` | `{ usuario, pendiente }` |
 
 **`pendiente`** vale `"perfil"` si falta el DNI, `"marca"` si falta la marca y
@@ -415,15 +484,25 @@ aislados en su marca. **El `rol` nunca se toma del body**: mandar
 La contraseña necesita 6 caracteres como mínimo. Si el email ya existe devuelve
 400 con `"Ya hay una cuenta registrada con ese email"`.
 
-### Recuperación de contraseña: los 3 pasos del front
+### Login
+
+Con un email que no existe, con una cuenta de Google (que no tiene contraseña)
+o con la contraseña mal, la respuesta es siempre la misma: **401
+`"Email o contraseña incorrectos"`**, y tarda lo mismo (siempre pasa por
+bcrypt). Si no, la respuesta o lo que tarda delatarían qué emails usan la app.
+La pista de "entrá con Google" la da la pantalla del login y el mail de
+recuperación.
+
+### Recuperación de contraseña: los 3 pasos
 
 ```
-1. View "olvidé mi contraseña"
+1. View "olvidé mi contraseña" (en la app)
    POST /auth/recuperar-password  { email }
    → 200 siempre, exista o no el email (para no filtrar quién está registrado)
-   → manda un mail con <FRONTEND_URL>/resetear-password?token=xxx
+   → manda un mail con <API_PUBLIC_URL>/cuenta/nueva-password#token=xxx
+     (si la cuenta es de Google, el mail lo dice y el link sirve para ponerle una)
 
-2. View "resetear" (al abrir el link, antes de mostrar el formulario)
+2. Página "nueva contraseña" (al abrir el link, antes de mostrar el formulario)
    GET /auth/recuperar-password/:token
    → 200 { valido: true, email } | 400 "El link no es válido o ya venció"
 
@@ -460,17 +539,66 @@ si las credenciales están mal.
 
 ### Rate limit
 
-`src/middleware/rateLimit.ts` limita por IP: 10 intentos cada 15 min en `/auth/login`,
-5 cada 15 min en `/auth/recuperar-password`, 10 por hora en `/auth/registro`,
-20 mails de factura por hora (`/facturas/:id/enviar`), 30 firmas de logo por hora
-y 30 aperturas de link público cada 15 min (`/publico/facturas/:token`).
-Al superarlo devuelve 429 con el header `Retry-After`. Un login exitoso resetea
-el contador. Es en memoria: con más de una instancia del server hay que moverlo
-a Redis.
+`src/middleware/rateLimit.ts` cuenta por IP, salvo donde se indica otra cosa.
+Detrás de un proxy la IP del cliente solo es real con `TRUST_PROXY` bien
+puesto (ver [En producción](#en-producción)).
+
+| Ruta | Límite |
+| --- | --- |
+| `POST /auth/login` | 30 cada 15 min por IP y 10 cada 15 min por email |
+| `POST /auth/recuperar-password` | 10 cada 15 min por IP y 3 por hora por email |
+| `GET /auth/recuperar-password/:token` | 30 cada 15 min |
+| `POST /auth/resetear-password` | 10 cada 15 min |
+| `POST /auth/registro` | 10 por hora |
+| `POST /auth/google` | 20 cada 15 min |
+| `POST /auth/cambiar-password` | 5 cada 15 min por usuario (contador `reautenticacion`) |
+| `POST /facturas/:id/enviar` | 20 por hora y 100 por día por marca |
+| `POST /app/errores` | 20 cada 15 min |
+| Firmas de logo | 30 por hora |
+| `GET /publico/facturas/:token` | 30 cada 15 min |
+
+Al superarlo devuelve 429 con el header `Retry-After`. Un login correcto limpia
+solo el contador de **su email**: el de la IP sigue corriendo, así nadie se
+reinicia el cupo entrando con una cuenta propia. Los contadores por email usan
+el email normalizado (`Ana@x.com ` y `ana@x.com` son el mismo). Es en memoria:
+con más de una instancia del server hay que moverlo a Redis.
+
+## Errores de la app
+
+La app reporta sus errores de pantalla y los errores JS fatales a
+`POST /app/errores` (público: si viene un token válido se asocia al usuario, y
+si viene uno roto se ignora). Responde 202 `{ recibido: true }`. El back no
+guarda la IP, el email, el token ni el body de las requests. El mensaje, el
+stack y la ruta pasan por `redactar()` (`src/utils/logger.ts`), que cambia los
+emails por `[email]`, los números de 7 o más dígitos (DNI, teléfonos) por
+`[numero]` y los tokens por `[token]`. Cada reporte deja una línea `warn` en el
+log con la versión, la plataforma y los primeros caracteres de su **huella**
+(hash de nombre + mensaje + primera línea del stack: el mismo error cae siempre
+en la misma).
+
+Se guardan en la colección **`errores_cliente`** y se borran solos a los **30
+días** (índice TTL). Para consultarlos desde `mongosh`:
+
+```js
+// Los últimos 20
+db.errores_cliente.find().sort({ createdAt: -1 }).limit(20)
+
+// Agrupados por huella: cuáles pasan más
+db.errores_cliente.aggregate([
+  { $group: { _id: '$huella', veces: { $sum: 1 }, mensaje: { $first: '$mensaje' }, ultima: { $max: '$createdAt' } } },
+  { $sort: { veces: -1 } }
+])
+```
 
 ## Endpoints completos
 
 ```
+GET    /health                            (healthcheck del hosting: 503 si Mongo no está o se está apagando)
+GET    /app/version                       (versión mínima y última de la app, y el link a la tienda)
+POST   /app/errores                       (la app reporta un error; ver "Errores de la app")
+GET    /cuenta/nueva-password             (página HTML: elegir la contraseña nueva, con el token en #token=)
+GET    /cuenta/abrir                      (página HTML: abrir la app; ?destino=login|recuperar-password)
+
 POST   /auth/registro
 POST   /auth/google
 POST   /auth/login

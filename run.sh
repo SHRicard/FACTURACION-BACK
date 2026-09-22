@@ -146,8 +146,9 @@ const nivelLog = process.env.LOG_LEVEL ||
   (process.env.NODE_ENV === "production" ? "info (auto)" : "debug (auto)");
 console.log(`OK\tLOG_LEVEL\t${nivelLog}`);
 
-const frontend = process.env.FRONTEND_URL || "http://localhost:5173 (por defecto)";
-console.log(`OK\tFRONTEND_URL\t${frontend}`);
+// Base de todos los links de los mails y de los links públicos de facturas.
+const api = process.env.API_PUBLIC_URL || "sin setear (en desarrollo usa http://localhost:<PORT>)";
+console.log(`OK\tAPI_PUBLIC_URL\t${api}`);
 
 const smtpOk = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 console.log(`OK\tSMTP\t${smtpOk ? process.env.SMTP_HOST : "sin configurar → los mails van a la consola"}`);

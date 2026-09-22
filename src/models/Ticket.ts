@@ -55,6 +55,13 @@ export interface TicketAtributos {
   anuladoEl?: Date;
   motivoAnulacion?: string;
 
+  /**
+   * La clave que mandó el front en Idempotency-Key y la huella del pedido,
+   * para reconocer un reintento (ver utils/idempotencia.ts). No salen en el JSON.
+   */
+  claveIdempotencia?: string;
+  huellaIdempotencia?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +71,18 @@ export type TicketDocument = HydratedDocument<TicketAtributos>;
 /** Lo que quedó debiendo de este ticket. Derivado, para que no pueda desfasarse. */
 export const faltanteDe = (t: Pick<TicketAtributos, "total" | "pagado">): number =>
   Math.max(t.total - (t.pagado ?? 0), 0);
+
+/**
+ * Topes de un ticket. Los valida routes/tickets.ts y el formulario del front
+ * los repite en tickets/schemas.ts. Sin tope, 1e308 × 2 da Infinity, que JSON
+ * manda como null y rompe la ficha.
+ */
+export const LIMITES_TICKET = {
+  renglones: 100,
+  cantidad: 9_999,
+  precioUnitario: 100_000_000,
+  total: 1_000_000_000,
+} as const;
 
 const itemSchema = new Schema<ItemTicket>(
   {
@@ -95,18 +114,31 @@ const ticketSchema = new Schema<TicketAtributos>(
     anulado: { type: Boolean, default: false },
     anuladoEl: { type: Date },
     motivoAnulacion: { type: String, trim: true },
+
+    claveIdempotencia: { type: String },
+    huellaIdempotencia: { type: String },
   },
   { timestamps: true }
 );
 
-// El front necesita el faltante sin tener que restarlo.
+// El front necesita el faltante sin tener que restarlo. La clave y la huella
+// de idempotencia son internas: no viajan.
 ticketSchema.set("toJSON", {
-  transform: (_doc, ret) => ({ ...ret, faltante: faltanteDe(ret) }),
+  transform: (_doc, ret) => {
+    const { claveIdempotencia: _clave, huellaIdempotencia: _huella, ...visible } = ret;
+    return { ...visible, faltante: faltanteDe(visible) };
+  },
 });
 
 ticketSchema.index({ factura: 1, fecha: 1 });
 ticketSchema.index({ cliente: 1, fecha: -1 });
 // Para las métricas de qué especie se vende más.
 ticketSchema.index({ marca: 1, "items.especie": 1, fecha: -1 });
+// Idempotencia del alta. Parcial para que los tickets sin clave (viejos, o
+// cargados por curl) no choquen entre sí.
+ticketSchema.index(
+  { marca: 1, claveIdempotencia: 1 },
+  { unique: true, partialFilterExpression: { claveIdempotencia: { $type: "string" } } }
+);
 
 export default mongoose.model<TicketAtributos>("Ticket", ticketSchema);

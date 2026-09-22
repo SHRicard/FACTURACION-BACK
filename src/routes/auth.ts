@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import Usuario, {
   MINUTOS_VALIDEZ_RESET,
   hashearToken,
@@ -10,16 +12,28 @@ import { pendienteDe, type Pendiente } from "../middleware/marca.js";
 import { marcaConDuenos } from "../services/marcas.js";
 import { ROL_POR_DEFECTO } from "../config/roles.js";
 import { requireAuth } from "../middleware/auth.js";
-import { rateLimit, limpiarRateLimit } from "../middleware/rateLimit.js";
+import {
+  rateLimit,
+  limpiarRateLimit,
+  porEmailDelBody,
+  porUsuario,
+} from "../middleware/rateLimit.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { AppError, datosInvalidos, noAutorizado } from "../utils/AppError.js";
+import {
+  AppError,
+  datosInvalidos,
+  errorDeCampo,
+  noAutorizado,
+} from "../utils/AppError.js";
 import { verificarIdTokenGoogle } from "../utils/google.js";
 import { resolverUsuarioGoogle } from "../services/googleAuth.js";
-import { logger } from "../utils/logger.js";
+import { urlApi } from "../services/enlacesFactura.js";
+import { enmascararEmail, logger } from "../utils/logger.js";
 import { enviarEmail } from "../utils/email.js";
 import {
   adjuntoLogo,
   bienvenida,
+  cuentaVinculada,
   recuperarPassword,
   passwordCambiado,
 } from "../emails/index.js";
@@ -55,24 +69,22 @@ const respuestaSesion = (usuario: UsuarioDocument): RespuestaSesion => ({
   pendiente: pendienteDe(usuario),
 });
 
-/** Base del front, sin barra final. De acá salen los links de los mails. */
-const urlFront = (ruta = ""): string => {
-  const base = (process.env["FRONTEND_URL"] ?? "http://localhost:5173").replace(
-    /\/$/,
-    "",
-  );
-  return `${base}${ruta}`;
-};
+// Hash de una contraseña que nadie conoce (K14). Cuando el email no existe o
+// la cuenta no tiene contraseña (entra con Google), el login compara contra
+// esto en vez de cortar antes: así siempre pasa por bcrypt y el tiempo de
+// respuesta no delata qué emails usan la app.
+const HASH_DE_RELLENO = bcrypt.hashSync(randomBytes(16).toString("hex"), 10);
 
 function validarPassword(
   password: unknown,
   campo = "password",
 ): asserts password is string {
   if (!password || typeof password !== "string") {
-    throw datosInvalidos(`El campo "${campo}" es requerido`);
+    throw errorDeCampo(campo, `El campo "${campo}" es requerido`);
   }
   if (password.length < LARGO_MINIMO_PASSWORD) {
-    throw datosInvalidos(
+    throw errorDeCampo(
+      campo,
       `La contraseña debe tener al menos ${LARGO_MINIMO_PASSWORD} caracteres`,
     );
   }
@@ -80,18 +92,16 @@ function validarPassword(
 
 function exigirTexto(valor: unknown, campo: string): string {
   if (typeof valor !== "string" || !valor.trim()) {
-    throw datosInvalidos(`El campo "${campo}" es requerido`);
+    throw errorDeCampo(campo, `El campo "${campo}" es requerido`);
   }
   return valor.trim();
 }
 
 function exigirAceptacion(valor: unknown): void {
   if (valor !== true) {
-    throw datosInvalidos(
+    throw errorDeCampo(
+      "aceptoTerminosYCondiciones",
       "Tenés que aceptar los términos y condiciones y la política de privacidad",
-      {
-        campo: "aceptoTerminosYCondiciones",
-      },
     );
   }
 }
@@ -116,14 +126,16 @@ router.post(
     exigirAceptacion(req.body?.aceptoTerminosYCondiciones);
 
     if (!EMAIL_VALIDO.test(email))
-      throw datosInvalidos("El email no tiene un formato válido");
+      throw errorDeCampo("email", "El email no tiene un formato válido");
     validarPassword(password);
 
     // El índice único también lo cubre (devolvería 409), pero chequear acá da
     // un mensaje más claro y evita gastar un hash de bcrypt al pedo.
+    // Este mensaje revela que el email ya tiene cuenta. Se queda a propósito
+    // (K14): sacarlo sin romper el alta exige verificar el email primero.
     const yaExiste = await Usuario.findOne({ email });
     if (yaExiste)
-      throw datosInvalidos("Ya hay una cuenta registrada con ese email");
+      throw errorDeCampo("email", "Ya hay una cuenta registrada con ese email");
 
     // Ojo: el rol NUNCA sale del body. Si no, cualquiera se registra de
     // super_admin mandando { rol: "super_admin" }.
@@ -138,13 +150,15 @@ router.post(
       rol: ROL_POR_DEFECTO,
     });
 
-    logger.success(`Cuenta nueva: ${usuario.email}`);
+    logger.success(`Cuenta nueva: ${enmascararEmail(usuario.email)}`);
 
-    // El mail de bienvenida no debe frenar ni romper el registro.
+    // El mail de bienvenida no debe frenar ni romper el registro. El botón va
+    // a una página del back que abre la app (K9): los clientes de mail no
+    // hacen clickeable un link a facturacionfront://.
     const mail = bienvenida({
       nombre: usuario.nombre,
       email: usuario.email,
-      urlApp: urlFront("/login"),
+      urlApp: urlApi("/cuenta/abrir?destino=login"),
     });
     void enviarEmail({
       para: usuario.email,
@@ -158,36 +172,48 @@ router.post(
 
 // ───────────────────────── Login ─────────────────────────
 // POST /auth/login   { email, password }
+//
+// Dos límites: uno por IP, que nunca se limpia, y otro por email, que se
+// limpia solo al acertar. Antes era uno solo por IP y cualquier login
+// correcto lo reiniciaba: con una cuenta propia, un atacante se reiniciaba el
+// cupo cada 9 intentos (S2). Ahora acertar limpia el contador de ESE email y
+// el de la IP sigue corriendo.
 router.post(
   "/login",
-  rateLimit({ nombre: "login", maximo: 10, ventanaMs: 15 * 60 * 1000 }),
+  rateLimit({ nombre: "login-ip", maximo: 30, ventanaMs: 15 * 60 * 1000 }),
+  rateLimit({
+    nombre: "login",
+    maximo: 10,
+    ventanaMs: 15 * 60 * 1000,
+    clave: porEmailDelBody,
+  }),
   asyncHandler(async (req, res) => {
     const { email, password } = req.body ?? {};
-    if (!email || !password) {
-      throw datosInvalidos("Email y password son requeridos");
+    if (typeof email !== "string" || !email.trim()) {
+      throw errorDeCampo("email", "Escribí tu email");
+    }
+    if (typeof password !== "string" || !password) {
+      throw errorDeCampo("password", "Escribí tu contraseña");
     }
 
     // El password tiene select:false en el schema, hay que pedirlo explícito.
     const usuario = await Usuario.findOne({
-      email: String(email).toLowerCase(),
+      email: email.trim().toLowerCase(),
     }).select("+password");
 
-    // Mismo mensaje exista o no el usuario: si no, se puede averiguar qué
-    // emails están registrados probando de a uno.
-    if (!usuario) throw noAutorizado("Credenciales inválidas");
-
-    // Cuenta creada con Google: no tiene contraseña que comparar. Se lo decimos,
-    // porque acá no revelamos nada que el usuario no sepa ya de su propia cuenta.
-    if (!usuario.password) {
-      throw noAutorizado(
-        'Esta cuenta usa Google para entrar. Tocá "Continuar con Google".',
-      );
+    // K14: siempre pasa por bcrypt, exista o no la cuenta y tenga o no
+    // contraseña (las de Google no tienen), y siempre con el mismo mensaje.
+    // Si no, la respuesta (o lo que tarda) delata qué emails usan la app.
+    // La pista "entrá con Google" la da la pantalla y el mail de recuperación.
+    const coincide = await bcrypt.compare(
+      password,
+      usuario?.password ?? HASH_DE_RELLENO,
+    );
+    if (!usuario || !usuario.password || !coincide) {
+      throw noAutorizado("Email o contraseña incorrectos");
     }
 
-    const passwordOk = await usuario.compararPassword(String(password));
-    if (!passwordOk) throw noAutorizado("Credenciales inválidas");
-
-    limpiarRateLimit("login", req);
+    limpiarRateLimit("login", req, porEmailDelBody);
     res.json(respuestaSesion(usuario));
   }),
 );
@@ -207,20 +233,32 @@ router.post(
 
     // El perfil sale del token ya verificado contra las claves de Google.
     const perfil = await verificarIdTokenGoogle(idToken);
-    const { usuario, caso } = await resolverUsuarioGoogle(
-      perfil,
-      aceptaTerminos,
-    );
+    const resultado = await resolverUsuarioGoogle(perfil, aceptaTerminos);
+    const { usuario, caso } = resultado;
 
     if (caso === "creada") {
       const mail = bienvenida({
         nombre: usuario.nombre,
         email: usuario.email,
-        urlApp: urlFront("/login"),
+        urlApp: urlApi("/cuenta/abrir?destino=login"),
       });
       void enviarEmail({
         para: usuario.email,
         ...mail,
+        adjuntos: [adjuntoLogo()],
+      });
+    }
+
+    // K13: al vincular se borró la contraseña que tenía la cuenta. Se le
+    // avisa a la dueña del email: si no fue ella la que entró con Google (o
+    // si la contraseña la había puesto otra persona), acá se entera.
+    if (resultado.caso === "vinculada" && resultado.teniaPassword) {
+      void enviarEmail({
+        para: usuario.email,
+        ...cuentaVinculada({
+          nombre: usuario.nombre,
+          urlRecuperar: urlApi("/cuenta/abrir?destino=recuperar-password"),
+        }),
         adjuntos: [adjuntoLogo()],
       });
     }
@@ -276,9 +314,10 @@ router.delete(
   requireAuth,
   asyncHandler<RequestAutenticado>(async (req, res) => {
     if (req.body?.confirmacion !== "ELIMINAR") {
-      throw datosInvalidos('Para eliminar la cuenta enviá { "confirmacion": "ELIMINAR" }', {
-        campo: "confirmacion",
-      });
+      throw errorDeCampo(
+        "confirmacion",
+        'Para eliminar la cuenta enviá { "confirmacion": "ELIMINAR" }',
+      );
     }
 
     const resultado = await eliminarCuenta(req.usuario);
@@ -301,15 +340,10 @@ router.put(
     if (req.usuario.dni) throw datosInvalidos(yaCargado);
 
     const dni = normalizarDni(req.body?.dni);
-    if (!dni)
-      throw datosInvalidos("El DNI tiene que tener 7 u 8 números", {
-        campo: "dni",
-      });
+    if (!dni) throw errorDeCampo("dni", "El DNI tiene que tener 7 u 8 números");
 
     if (await Usuario.exists({ dni })) {
-      throw new AppError("Ese DNI ya está registrado en otra cuenta", 409, {
-        campo: "dni",
-      });
+      throw errorDeCampo("dni", "Ese DNI ya está registrado en otra cuenta", 409);
     }
 
     // La condición "todavía sin DNI" evita que dos pedidos juntos lo pisen.
@@ -327,9 +361,19 @@ router.put(
 // ───────────────────── Recuperación: paso 1 ─────────────────────
 // POST /auth/recuperar-password   { email }
 // Manda el mail con el link. Responde siempre lo mismo, exista o no el email.
+//
+// Dos límites: por IP y por email. El de email (3 por hora) frena que le
+// llenen la bandeja a alguien pidiendo links a su nombre, y cuida el cupo
+// diario del SMTP, que es el mismo por el que salen todos los mails.
 router.post(
   "/recuperar-password",
-  rateLimit({ nombre: "recuperar", maximo: 5, ventanaMs: 15 * 60 * 1000 }),
+  rateLimit({ nombre: "recuperar-ip", maximo: 10, ventanaMs: 15 * 60 * 1000 }),
+  rateLimit({
+    nombre: "recuperar",
+    maximo: 3,
+    ventanaMs: 60 * 60 * 1000,
+    clave: porEmailDelBody,
+  }),
   asyncHandler(async (req, res) => {
     const email = exigirTexto(req.body?.email, "email").toLowerCase();
 
@@ -339,9 +383,13 @@ router.post(
         "Si el email está registrado, te va a llegar un link para recuperar la contraseña.",
     };
 
-    const usuario = await Usuario.findOne({ email });
+    // +password solo para saber si la cuenta tiene contraseña o entra con
+    // Google: el mail le da la pista que el login ya no da (K14).
+    const usuario = await Usuario.findOne({ email }).select("+password");
     if (!usuario) {
-      logger.debug(`Recuperación pedida para un email inexistente: ${email}`);
+      logger.debug(
+        `Recuperación pedida para un email inexistente: ${enmascararEmail(email)}`,
+      );
       res.json(respuesta);
       return;
     }
@@ -349,37 +397,49 @@ router.post(
     const token = usuario.generarTokenReset();
     await usuario.save({ validateBeforeSave: false });
 
-    const url = urlFront(`/resetear-password?token=${token}`);
+    // K9: página del back con el token en el fragmento (#), que el navegador
+    // no manda al servidor: no queda en logs ni en el Referer.
+    const url = `${urlApi("/cuenta/nueva-password")}#token=${token}`;
 
     const mail = recuperarPassword({
       nombre: usuario.nombre,
       url,
       minutos: MINUTOS_VALIDEZ_RESET,
+      usaGoogle: !usuario.password,
     });
 
-    const envio = await enviarEmail({
-      para: usuario.email,
-      ...mail,
-      adjuntos: [adjuntoLogo()],
-    });
-
-    // Si el mail no salió, el token quedaría guardado sin que nadie pueda
-    // usarlo. Lo borramos para que pueda pedir otro enseguida.
-    if (!envio.enviado && process.env["NODE_ENV"] === "production") {
-      usuario.resetPasswordToken = undefined;
-      usuario.resetPasswordExpira = undefined;
-      await usuario.save({ validateBeforeSave: false });
-    }
-
+    // Se responde antes de mandar el mail. Así el tiempo de respuesta es el
+    // mismo exista o no el email (S9: si no, lo que tarda el SMTP lo delata),
+    // y nadie se queda esperando a un SMTP lento.
     res.json(respuesta);
+
+    void (async () => {
+      const envio = await enviarEmail({
+        para: usuario.email,
+        ...mail,
+        adjuntos: [adjuntoLogo()],
+      });
+
+      // Si el mail no salió, el token quedaría guardado sin que nadie pueda
+      // usarlo. Lo borramos para que pueda pedir otro enseguida.
+      if (!envio.enviado && process.env["NODE_ENV"] === "production") {
+        usuario.resetPasswordToken = undefined;
+        usuario.resetPasswordExpira = undefined;
+        await usuario.save({ validateBeforeSave: false });
+      }
+    })().catch((error: unknown) => logger.error(error));
   }),
 );
 
 // ───────────────────── Recuperación: paso 2 ─────────────────────
 // GET /auth/recuperar-password/:token
 // Para que el front sepa si mostrar el formulario o "el link venció".
+// "El link no es válido o ya venció" va sin campos: la página de K9
+// (/cuenta/nueva-password) lo muestra como link vencido.
+// Con límite por IP para que no se puedan probar tokens de a miles.
 router.get(
   "/recuperar-password/:token",
+  rateLimit({ nombre: "validar-reset", maximo: 30, ventanaMs: 15 * 60 * 1000 }),
   asyncHandler(async (req, res) => {
     const usuario = await Usuario.findOne({
       resetPasswordToken: hashearToken(String(req.params["token"])),
@@ -415,11 +475,13 @@ router.post(
     usuario.resetPasswordExpira = undefined;
     await usuario.save();
 
-    logger.success(`Contraseña restablecida: ${usuario.email}`);
+    logger.success(
+      `Contraseña restablecida: ${enmascararEmail(usuario.email)}`,
+    );
 
     const aviso = passwordCambiado({
       nombre: usuario.nombre,
-      urlRecuperar: urlFront("/recuperar-password"),
+      urlRecuperar: urlApi("/cuenta/abrir?destino=recuperar-password"),
     });
     void enviarEmail({
       para: usuario.email,
@@ -434,13 +496,24 @@ router.post(
 
 // ───────────────────── Cambio con sesión iniciada ─────────────────────
 // POST /auth/cambiar-password   { passwordActual, passwordNueva }
+//
+// Límite por usuario, no por IP: con la sesión robada se podría adivinar la
+// contraseña actual desde muchas IPs. El contador "reautenticacion" es el
+// mismo que usa DELETE /auth/me/cuenta (K6): entre las dos rutas, 5 intentos.
 router.post(
   "/cambiar-password",
   requireAuth,
+  rateLimit({
+    nombre: "reautenticacion",
+    maximo: 5,
+    ventanaMs: 15 * 60 * 1000,
+    clave: porUsuario,
+  }),
   asyncHandler<RequestAutenticado>(async (req, res) => {
     const { passwordActual, passwordNueva } = req.body ?? {};
-    if (!passwordActual)
-      throw datosInvalidos('El campo "passwordActual" es requerido');
+    if (typeof passwordActual !== "string" || !passwordActual) {
+      throw errorDeCampo("passwordActual", "Escribí tu contraseña actual");
+    }
     validarPassword(passwordNueva, "passwordNueva");
 
     const usuario = await Usuario.findById(req.usuario._id).select("+password");
@@ -449,16 +522,30 @@ router.post(
     // Una cuenta de Google no tiene contraseña actual que confirmar. Para
     // ponerse una tiene que pasar por "recuperar contraseña".
     if (!usuario.password) {
-      throw datosInvalidos(
+      throw new AppError(
         'Tu cuenta entra con Google y no tiene contraseña. Si querés ponerle una, usá "Olvidé mi contraseña".',
+        400,
+        undefined,
+        "CUENTA_SIN_PASSWORD",
       );
     }
 
-    const passwordOk = await usuario.compararPassword(String(passwordActual));
-    if (!passwordOk) throw noAutorizado("La contraseña actual no es correcta");
+    // Nunca 401 (K7): el front cierra la sesión ante cualquier 401 de una
+    // ruta que no es pública, y tipear mal la contraseña actual no tiene que
+    // sacar a nadie de la app. El mensaje va debajo del input.
+    const passwordOk = await usuario.compararPassword(passwordActual);
+    if (!passwordOk) {
+      throw new AppError(
+        "La contraseña actual no es correcta",
+        400,
+        { campos: { passwordActual: "La contraseña actual no es correcta" } },
+        "CREDENCIALES_INVALIDAS",
+      );
+    }
 
     if (passwordActual === passwordNueva) {
-      throw datosInvalidos(
+      throw errorDeCampo(
+        "passwordNueva",
         "La contraseña nueva tiene que ser distinta de la actual",
       );
     }
@@ -466,11 +553,11 @@ router.post(
     usuario.password = passwordNueva;
     await usuario.save();
 
-    logger.success(`Contraseña cambiada: ${usuario.email}`);
+    logger.success(`Contraseña cambiada: ${enmascararEmail(usuario.email)}`);
 
     const aviso = passwordCambiado({
       nombre: usuario.nombre,
-      urlRecuperar: urlFront("/recuperar-password"),
+      urlRecuperar: urlApi("/cuenta/abrir?destino=recuperar-password"),
     });
     void enviarEmail({
       para: usuario.email,

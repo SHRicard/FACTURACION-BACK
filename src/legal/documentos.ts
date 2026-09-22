@@ -9,7 +9,7 @@ export const CONTACTO_LEGAL =
   process.env["LEGAL_CONTACT_EMAIL"] ?? "completar-contacto-legal@ejemplo.com";
 
 /** Cómo se llama la app en la ficha de Play. */
-export const NOMBRE_APLICACION = process.env["APP_NAME"] ?? "Cuenta Corriente";
+export const NOMBRE_APLICACION = process.env["APP_NAME"] ?? "Facturación FCT";
 
 /**
  * Página pública donde se pide la baja sin estar logueado. Es el "recurso web
