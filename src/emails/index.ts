@@ -1,6 +1,5 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { CID_LOGO } from "./layout.js";
+import { rutaAsset } from "../utils/assets.js";
 
 /** Un email listo para mandar: asunto, HTML, texto plano y vista previa. */
 export interface Plantilla {
@@ -13,19 +12,20 @@ export interface Plantilla {
   vistaPrevia: string;
 }
 
-/** Adjunto embebido: se referencia desde el HTML como cid:<cid>. */
+/**
+ * Un adjunto del mail. Dos usos:
+ *   - embebido (el logo): con `cid`, y el HTML lo referencia como cid:<cid>
+ *   - archivo (el PDF de la factura): con `content`, sin `cid`
+ */
 export interface Adjunto {
   filename: string;
-  path: string;
-  cid: string;
+  path?: string;
+  content?: Buffer;
+  contentType?: string;
+  cid?: string;
 }
 
-// En dist/ los assets se copian junto al código compilado (ver el script
-// "build" del package.json), así que esta ruta vale tanto corriendo con tsx
-// desde src/ como corriendo el JS de dist/.
-const carpetaActual = path.dirname(fileURLToPath(import.meta.url));
-
-export const rutaLogo = path.join(carpetaActual, "assets", "logo-morgana-640.png");
+export const rutaLogo = rutaAsset("icono-app-144.png");
 
 /**
  * El logo va adjunto y embebido, no como URL: los assets no están publicados
@@ -34,7 +34,7 @@ export const rutaLogo = path.join(carpetaActual, "assets", "logo-morgana-640.png
  * remitentes nuevos.
  */
 export const adjuntoLogo = (): Adjunto => ({
-  filename: "morgana.png",
+  filename: "logo.png",
   path: rutaLogo,
   cid: CID_LOGO,
 });
@@ -43,3 +43,5 @@ export { CID_LOGO } from "./layout.js";
 export { bienvenida, type DatosBienvenida } from "./plantillas/bienvenida.js";
 export { recuperarPassword, type DatosRecuperar } from "./plantillas/recuperarPassword.js";
 export { passwordCambiado, type DatosPasswordCambiado } from "./plantillas/passwordCambiado.js";
+export { cuentaVinculada, type DatosCuentaVinculada } from "./plantillas/cuentaVinculada.js";
+export { facturaCliente, type DatosFacturaCliente } from "./plantillas/facturaCliente.js";

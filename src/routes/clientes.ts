@@ -5,11 +5,18 @@ import { requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { datosInvalidos, noEncontrado } from "../utils/AppError.js";
 import { validarVentana, VENTANA_POR_DEFECTO, type VentanaPago } from "../utils/fechas.js";
+import { patronDeTexto } from "../utils/validaciones.js";
 import { abrirFactura, deudaTotalDe, serializarFactura } from "../services/facturacion.js";
-import type { RequestAutenticado } from "../types/index.js";
+import { TIPOS_MOVIMIENTO, historialCliente } from "../services/historialCliente.js";
+import { perfilCliente } from "../services/perfilCliente.js";
+import { leerPeriodoOpcional } from "../services/metricas/comun.js";
+import { leerOpcion, leerPaginacion } from "../utils/consulta.js";
+import { recalcularMarca } from "../services/marcas.js";
+import { requireMarca } from "../middleware/marca.js";
+import type { RequestConMarca } from "../types/index.js";
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, requireMarca);
 
 /** Lee la ventana de pago del body, validándola. */
 function leerVentana(body: Record<string, unknown> | undefined): VentanaPago {
@@ -32,9 +39,6 @@ function leerVentana(body: Record<string, unknown> | undefined): VentanaPago {
 const POR_PAGINA_DEFECTO = 20;
 const POR_PAGINA_MAXIMO = 100;
 
-/** Escapa lo que el usuario tipeó para que no se interprete como regex. */
-const escaparRegex = (texto: string): string => texto.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 /**
  * Listar clientes, con lo que debe cada uno.
  *
@@ -51,7 +55,7 @@ const escaparRegex = (texto: string): string => texto.replace(/[.*+?^${}()|[\]\\
  */
 router.get(
   "/",
-  asyncHandler<RequestAutenticado>(async (req, res) => {
+  asyncHandler<RequestConMarca>(async (req, res) => {
     const buscar = typeof req.query["buscar"] === "string" ? req.query["buscar"].trim() : "";
     const soloDeudores = req.query["deudores"] === "true";
     const soloVencidos = req.query["vencidos"] === "true";
@@ -62,10 +66,11 @@ router.get(
       Math.max(1, Number(req.query["porPagina"]) || POR_PAGINA_DEFECTO)
     );
 
-    const filtro: Record<string, unknown> = { administrador: req.usuario._id };
+    // aggregate no convierte tipos: req.marca._id ya es un ObjectId.
+    const filtro: Record<string, unknown> = { marca: req.marca._id };
 
     if (buscar) {
-      const patron = new RegExp(escaparRegex(buscar), "i");
+      const patron = patronDeTexto(buscar);
       filtro["$or"] = [{ nombre: patron }, { dni: patron }];
     }
 
@@ -82,7 +87,7 @@ router.get(
             {
               $match: {
                 $expr: { $eq: ["$cliente", "$$clienteId"] },
-                estado: { $in: ["abierta", "cerrada"] },
+                estado: "abierta",
                 saldo: { $gt: 0 },
               },
             },
@@ -131,10 +136,10 @@ router.get(
 // Un cliente, con su deuda y su factura abierta
 router.get(
   "/:id",
-  asyncHandler<RequestAutenticado>(async (req, res) => {
+  asyncHandler<RequestConMarca>(async (req, res) => {
     const cliente = await Cliente.findOne({
       _id: req.params["id"],
-      administrador: req.usuario._id,
+      marca: req.marca._id,
     });
     if (!cliente) throw noEncontrado("Cliente");
 
@@ -149,6 +154,51 @@ router.get(
 );
 
 /**
+ * GET /clientes/:id/historial — toda su historia con la marca
+ *
+ * El cliente, sus números de siempre, todas sus facturas y sus movimientos
+ * (compras y pagos mezclados, del más nuevo al más viejo).
+ *
+ * Query params:
+ *   tipo       todos | compras | pagos (filtra solo los movimientos)
+ *   pagina     desde 1
+ *   porPagina  hasta 100
+ *
+ * Ver doc/HISTORIAL_CLIENTE.md.
+ */
+router.get(
+  "/:id/historial",
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    res.json(
+      await historialCliente(req.marca._id, req.params["id"] ?? "", {
+        tipo: leerOpcion(req.query, "tipo", TIPOS_MOVIMIENTO, "todos"),
+        paginacion: leerPaginacion(req.query),
+      })
+    );
+  })
+);
+
+/**
+ * GET /clientes/:id/perfil — cuánto vale y qué tan confiable es
+ *
+ * Su cumplimiento (con la racha y el mes a mes), en qué puesto queda entre los
+ * clientes de la marca, cuánto compró y qué compra.
+ *
+ * Query params:
+ *   desde, hasta   opcionales. Sin ellos, toda su historia
+ *
+ * Ver doc/PERFIL_CLIENTE.md.
+ */
+router.get(
+  "/:id/perfil",
+  asyncHandler<RequestConMarca>(async (req, res) => {
+    res.json(
+      await perfilCliente(req.marca._id, req.params["id"] ?? "", leerPeriodoOpcional(req.query))
+    );
+  })
+);
+
+/**
  * Crear cliente.
  *
  * Le abre su primera factura en el mismo paso: el administrador no tiene que
@@ -156,7 +206,7 @@ router.get(
  */
 router.post(
   "/",
-  asyncHandler<RequestAutenticado>(async (req, res) => {
+  asyncHandler<RequestConMarca>(async (req, res) => {
     const { nombre, dni, telefono, email, direccion, limiteCredito } = req.body ?? {};
 
     const cliente = await Cliente.create({
@@ -167,10 +217,11 @@ router.post(
       direccion,
       limiteCredito: limiteCredito ?? 0,
       ventanaPago: leerVentana(req.body),
-      administrador: req.usuario._id,
+      marca: req.marca._id,
     });
 
     const factura = await abrirFactura(cliente);
+    await recalcularMarca(req.marca._id);
 
     res.status(201).json({ ...cliente.toJSON(), facturaAbierta: serializarFactura(factura) });
   })
@@ -178,7 +229,7 @@ router.post(
 
 router.put(
   "/:id",
-  asyncHandler<RequestAutenticado>(async (req, res) => {
+  asyncHandler<RequestConMarca>(async (req, res) => {
     const { nombre, dni, telefono, email, direccion, limiteCredito } = req.body ?? {};
 
     const cambios: Record<string, unknown> = { nombre, dni, telefono, email, direccion };
@@ -186,7 +237,7 @@ router.put(
     if (req.body?.ventanaPago) cambios["ventanaPago"] = leerVentana(req.body);
 
     const cliente = await Cliente.findOneAndUpdate(
-      { _id: req.params["id"], administrador: req.usuario._id },
+      { _id: req.params["id"], marca: req.marca._id },
       cambios,
       { new: true, runValidators: true }
     );

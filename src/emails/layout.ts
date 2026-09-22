@@ -1,12 +1,23 @@
 import { color, fuente, medida } from "./tokens.js";
-import { fileteMarca, preheader } from "./componentes.js";
+import { escaparHtml, fileteMarca, preheader } from "./componentes.js";
+import { NOMBRE_APLICACION } from "../legal/documentos.js";
+
+/**
+ * El nombre de la app en los mails: el mismo de la ficha de Play y de los
+ * documentos legales (APP_NAME). Un mail con otro nombre que el de la app que
+ * la persona instaló se lee como phishing.
+ */
+export const NOMBRE_APP = NOMBRE_APLICACION;
+
+/** Firma de los mails de la app, igual en el HTML y en el texto plano. */
+export const FIRMA_APP = `${NOMBRE_APP} · Cuentas corrientes de tu negocio`;
 
 /**
  * El logo se manda adjunto y se referencia con cid:, no con una URL. Así se ve
  * aunque el proyecto no tenga los assets publicados en ningún lado, que es el
  * caso hoy. Si algún día hay CDN, alcanza con cambiar el src por la URL.
  */
-export const CID_LOGO = "logo-morgana";
+export const CID_LOGO = "logo-app";
 
 export interface OpcionesLayout {
   /** Texto de vista previa, el que se lee en la bandeja al lado del asunto. */
@@ -15,9 +26,48 @@ export interface OpcionesLayout {
   contenido: string;
   /** Línea extra en el pie, opcional. */
   pie?: string;
+  /**
+   * Para los mails que el usuario le manda a SU cliente (la factura): salen
+   * con la marca del usuario, no con la de la app. Con `cidLogo` va su logo;
+   * sin logo, su nombre en grande.
+   */
+  marca?: { nombre: string; cidLogo?: string | undefined };
 }
 
-export function layout({ vistaPrevia, contenido, pie }: OpcionesLayout): string {
+/** El logo de la marca del usuario, adjunto al mail y referenciado como cid:. */
+export const CID_LOGO_MARCA = "logo-marca";
+
+export function layout({ vistaPrevia, contenido, pie, marca }: OpcionesLayout): string {
+  const nombreApp = escaparHtml(NOMBRE_APP);
+  const nombre = marca ? escaparHtml(marca.nombre) : nombreApp;
+
+  // El ícono de la app con el nombre en texto debajo. El alt va vacío porque
+  // el nombre ya se lee abajo: un lector de pantalla no lo dice dos veces, y
+  // si el cliente no muestra la imagen el nombre sigue ahí.
+  const cabecera = !marca
+    ? `<img src="cid:${CID_LOGO}" width="72" height="72" alt=""
+                   style="display:block;width:72px;height:72px;max-width:72px;margin:0 auto;" />
+              <p style="margin:12px 0 0;font-family:${fuente.texto};font-size:22px;line-height:28px;font-weight:700;color:${color.tinta};">${nombreApp}</p>`
+    : marca.cidLogo
+      ? `<img src="cid:${marca.cidLogo}" width="180" alt="${nombre}"
+                   style="display:block;width:180px;max-width:180px;height:auto;" />`
+      : `<p style="margin:0;font-family:${fuente.texto};font-size:26px;line-height:32px;font-weight:700;color:${color.violetaProfundo};">${nombre}</p>`;
+
+  // En los mails de una marca no se nombra a la app: el mail es del negocio.
+  const aviso = marca
+    ? ""
+    : `<p style="margin:0;">
+                      Este mail se envió automáticamente desde tu cuenta de
+                      <strong style="color:${color.violetaPrimario};font-weight:600;">${nombreApp}</strong>.
+                      No hace falta que lo respondas.
+                    </p>`;
+
+  const firma = marca
+    ? ""
+    : `<p style="margin:20px 0 0;font-family:${fuente.texto};font-size:12px;line-height:18px;color:${color.textoTenue};">
+          ${escaparHtml(FIRMA_APP)}
+        </p>`;
+
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="es">
 <head>
@@ -28,7 +78,7 @@ export function layout({ vistaPrevia, contenido, pie }: OpcionesLayout): string 
   <!-- Le decimos al cliente que el diseño es claro, para que no lo invierta a lo bruto. -->
   <meta name="color-scheme" content="light" />
   <meta name="supported-color-schemes" content="light" />
-  <title>Morgana</title>
+  <title>${nombre}</title>
   <!--[if mso]>
   <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
   <![endif]-->
@@ -60,8 +110,7 @@ export function layout({ vistaPrevia, contenido, pie }: OpcionesLayout): string 
           <!-- Cabecera: el logo respira, sin nada que le compita -->
           <tr>
             <td align="center" class="relleno" style="padding:38px 40px 30px;">
-              <img src="cid:${CID_LOGO}" width="220" height="80" alt="Morgana"
-                   style="display:block;width:220px;height:80px;max-width:220px;" />
+              ${cabecera}
             </td>
           </tr>
 
@@ -81,11 +130,7 @@ export function layout({ vistaPrevia, contenido, pie }: OpcionesLayout): string 
                 <tr>
                   <td style="border-top:1px solid ${color.borde};padding-top:22px;font-family:${fuente.texto};font-size:13px;line-height:21px;color:${color.textoTenue};">
                     ${pie ? `<p style="margin:0 0 10px;">${pie}</p>` : ""}
-                    <p style="margin:0;">
-                      Este mail se envió automáticamente desde tu cuenta de
-                      <strong style="color:${color.violetaPrimario};font-weight:600;">Morgana</strong>.
-                      No hace falta que lo respondas.
-                    </p>
+                    ${aviso}
                   </td>
                 </tr>
               </table>
@@ -93,9 +138,7 @@ export function layout({ vistaPrevia, contenido, pie }: OpcionesLayout): string 
           </tr>
         </table>
 
-        <p style="margin:20px 0 0;font-family:${fuente.texto};font-size:12px;line-height:18px;color:${color.textoTenue};">
-          Morgana · Gestión de cuentas corrientes
-        </p>
+        ${firma}
 
       </td>
     </tr>

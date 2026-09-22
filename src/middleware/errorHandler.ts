@@ -1,8 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
-import { AppError } from "../utils/AppError.js";
-import { logger, pintar, sanitizar, esProduccion } from "../utils/logger.js";
+import { AppError, type DetallesError } from "../utils/AppError.js";
+import { logger, pintar, sanitizar, enmascararEmail } from "../utils/logger.js";
 import type { ErrorEnLocals } from "../types/index.js";
 
 // jsonwebtoken es CommonJS: `import { JsonWebTokenError } from "jsonwebtoken"`
@@ -13,7 +13,8 @@ const { JsonWebTokenError, TokenExpiredError } = jwt;
 interface ErrorTraducido {
   statusCode: number;
   mensaje: string;
-  detalles?: unknown;
+  codigo?: string | undefined;
+  detalles?: DetallesError | undefined;
 }
 
 // El driver de Mongo tira este error cuando se viola un índice único. No lo
@@ -29,20 +30,26 @@ const esClaveDuplicada = (error: unknown): error is ErrorClaveDuplicada =>
 
 const esJsonRoto = (error: unknown): boolean => error instanceof SyntaxError && "body" in error;
 
-// Traduce cualquier error a { statusCode, mensaje, detalles }.
+// Traduce cualquier error a { statusCode, mensaje, codigo, detalles }.
+// Los mensajes por campo van siempre en detalles.campos (ver AppError.ts).
 // Acá centralizamos los errores típicos de mongoose/jwt para no repetir
 // el mismo try/catch en cada ruta.
 function traducirError(error: unknown): ErrorTraducido {
   if (error instanceof AppError) {
-    return { statusCode: error.statusCode, mensaje: error.message, detalles: error.detalles };
+    return {
+      statusCode: error.statusCode,
+      mensaje: error.message,
+      codigo: error.codigo,
+      detalles: error.detalles,
+    };
   }
 
   // Validación de un schema de mongoose → qué campo falló y por qué.
   if (error instanceof mongoose.Error.ValidationError) {
-    const detalles = Object.fromEntries(
+    const campos = Object.fromEntries(
       Object.values(error.errors).map((e) => [e.path, e.message])
     );
-    return { statusCode: 400, mensaje: "Datos inválidos", detalles };
+    return { statusCode: 400, mensaje: "Datos inválidos", detalles: { campos } };
   }
 
   // ObjectId mal formado (ej: /clientes/123).
@@ -58,10 +65,17 @@ function traducirError(error: unknown): ErrorTraducido {
     // Nombrar solo el primero manda a buscar el problema al lugar equivocado:
     // "ya existe un registro con ese administrador" cuando en realidad se
     // repite el DNI dentro de ese negocio.
-    const utiles = campos.filter((c) => c !== "administrador");
+    const utiles = campos.filter((c) => c !== "marca");
     const nombrar = (utiles.length ? utiles : campos).join(" + ") || "valor";
+    const mensaje = `Ya existe un registro con ese ${nombrar}`;
 
-    return { statusCode: 409, mensaje: `Ya existe un registro con ese ${nombrar}` };
+    // Con un solo campo útil ({ email } o { marca, dni }) el front sabe debajo
+    // de qué input mostrarlo. Con más de uno no hay un input al que culpar.
+    const [unico] = utiles;
+    if (utiles.length === 1 && unico) {
+      return { statusCode: 409, mensaje, detalles: { campos: { [unico]: mensaje } } };
+    }
+    return { statusCode: 409, mensaje };
   }
 
   if (error instanceof TokenExpiredError) {
@@ -95,11 +109,15 @@ export function errorHandler(
     return;
   }
 
-  const { statusCode, mensaje, detalles } = traducirError(error);
+  const { statusCode, mensaje, codigo, detalles } = traducirError(error);
 
   // requestLogger lo lee al terminar la request y lo agrega a su línea, así no
   // imprimimos dos veces el mismo método + ruta + status.
-  const enLocals: ErrorEnLocals = detalles === undefined ? { mensaje } : { mensaje, detalles };
+  const enLocals: ErrorEnLocals = {
+    mensaje,
+    ...(codigo && { codigo }),
+    ...(detalles !== undefined && { detalles }),
+  };
   res.locals["error"] = enLocals;
 
   if (statusCode >= 500) {
@@ -110,22 +128,30 @@ export function errorHandler(
       params: req.params,
       query: req.query,
       body: sanitizar(req.body),
-      usuario: req.usuario ? { id: String(req.usuario._id), email: req.usuario.email } : null,
+      usuario: req.usuario
+        ? { id: String(req.usuario._id), email: enmascararEmail(req.usuario.email) }
+        : null,
     });
   } else if (statusCode === 400) {
     // Error esperado, pero el body ayuda a entender por qué no validó.
     logger.debug("  body:", sanitizar(req.body));
   }
 
-  // El stack solo viaja al cliente si es un bug (5xx) y no estamos en
-  // producción. Los 4xx ya se explican con el mensaje y no necesitan ruido.
+  // El stack solo viaja al cliente si es un bug (5xx) y el entorno dice
+  // EXPLÍCITAMENTE development. Antes alcanzaba con "no es production", y si en
+  // el hosting faltaba NODE_ENV un 500 le mostraba al mundo rutas y código. Los
+  // 4xx ya se explican con el mensaje y no necesitan ruido.
   const stack =
-    !esProduccion() && statusCode >= 500 && error instanceof Error && error.stack
+    process.env["NODE_ENV"] === "development" &&
+    statusCode >= 500 &&
+    error instanceof Error &&
+    error.stack
       ? error.stack.split("\n")
       : undefined;
 
   res.status(statusCode).json({
     error: mensaje,
+    ...(codigo && { codigo }),
     ...(detalles !== undefined && { detalles }),
     ...(stack && { stack }),
   });

@@ -20,7 +20,8 @@ export interface ClienteAtributos {
   /** Hasta cuánto se le fía. 0 = sin límite. */
   limiteCredito: number;
 
-  administrador: Types.ObjectId;
+  /** De qué marca es: lo ven y lo manejan todos sus dueños. */
+  marca: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,12 +43,12 @@ const clienteSchema = new Schema<ClienteAtributos>(
 
     limiteCredito: { type: Number, default: 0, min: 0 },
 
-    administrador: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    marca: { type: Schema.Types.ObjectId, ref: "Marca", required: true },
   },
   { timestamps: true }
 );
 
-// El mismo DNI no se repite dentro de un negocio, pero sí puede estar en otro.
-clienteSchema.index({ administrador: 1, dni: 1 }, { unique: true });
+// El mismo DNI no se repite dentro de una marca, pero sí puede estar en otra.
+clienteSchema.index({ marca: 1, dni: 1 }, { unique: true });
 
 export default mongoose.model<ClienteAtributos>("Cliente", clienteSchema);

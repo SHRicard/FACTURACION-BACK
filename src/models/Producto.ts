@@ -16,7 +16,7 @@ export interface ProductoAtributos {
   precio: number;
   stock: number;
   activo: boolean;
-  administrador: Types.ObjectId;
+  marca: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,12 +31,12 @@ const productoSchema = new Schema<ProductoAtributos>(
     precio: { type: Number, required: true, min: 0 },
     stock: { type: Number, default: 0 },
     activo: { type: Boolean, default: true },
-    administrador: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    marca: { type: Schema.Types.ObjectId, ref: "Marca", required: true },
   },
   { timestamps: true }
 );
 
-// Listar el stock de un negocio, y filtrar por tipo de producto.
-productoSchema.index({ administrador: 1, especie: 1 });
+// Listar el stock de una marca, y filtrar por tipo de producto.
+productoSchema.index({ marca: 1, especie: 1 });
 
 export default mongoose.model<ProductoAtributos>("Producto", productoSchema);

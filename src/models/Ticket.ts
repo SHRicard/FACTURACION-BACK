@@ -26,7 +26,7 @@ export interface TicketAtributos {
   /** A qué factura se pegó. Siempre la que estaba abierta al cargarlo. */
   factura: Types.ObjectId;
   cliente: Types.ObjectId;
-  administrador: Types.ObjectId;
+  marca: Types.ObjectId;
 
   fecha: Date;
   items: ItemTicket[];
@@ -39,7 +39,7 @@ export interface TicketAtributos {
    */
   pagado: number;
 
-  registradoPor: Types.ObjectId;
+  registradoPor?: Types.ObjectId;
 
   /**
    * Baja lógica. El ticket cargado por error no se borra: se tacha.
@@ -55,6 +55,13 @@ export interface TicketAtributos {
   anuladoEl?: Date;
   motivoAnulacion?: string;
 
+  /**
+   * La clave que mandó el front en Idempotency-Key y la huella del pedido,
+   * para reconocer un reintento (ver utils/idempotencia.ts). No salen en el JSON.
+   */
+  claveIdempotencia?: string;
+  huellaIdempotencia?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +71,18 @@ export type TicketDocument = HydratedDocument<TicketAtributos>;
 /** Lo que quedó debiendo de este ticket. Derivado, para que no pueda desfasarse. */
 export const faltanteDe = (t: Pick<TicketAtributos, "total" | "pagado">): number =>
   Math.max(t.total - (t.pagado ?? 0), 0);
+
+/**
+ * Topes de un ticket. Los valida routes/tickets.ts y el formulario del front
+ * los repite en tickets/schemas.ts. Sin tope, 1e308 × 2 da Infinity, que JSON
+ * manda como null y rompe la ficha.
+ */
+export const LIMITES_TICKET = {
+  renglones: 100,
+  cantidad: 9_999,
+  precioUnitario: 100_000_000,
+  total: 1_000_000_000,
+} as const;
 
 const itemSchema = new Schema<ItemTicket>(
   {
@@ -82,7 +101,7 @@ const ticketSchema = new Schema<TicketAtributos>(
   {
     factura: { type: Schema.Types.ObjectId, ref: "Factura", required: true },
     cliente: { type: Schema.Types.ObjectId, ref: "Cliente", required: true },
-    administrador: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    marca: { type: Schema.Types.ObjectId, ref: "Marca", required: true },
 
     fecha: { type: Date, default: Date.now },
     items: { type: [itemSchema], required: true },
@@ -90,23 +109,36 @@ const ticketSchema = new Schema<TicketAtributos>(
     total: { type: Number, required: true, min: 0 },
     pagado: { type: Number, default: 0, min: 0 },
 
-    registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario", required: true },
+    registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario" },
 
     anulado: { type: Boolean, default: false },
     anuladoEl: { type: Date },
     motivoAnulacion: { type: String, trim: true },
+
+    claveIdempotencia: { type: String },
+    huellaIdempotencia: { type: String },
   },
   { timestamps: true }
 );
 
-// El front necesita el faltante sin tener que restarlo.
+// El front necesita el faltante sin tener que restarlo. La clave y la huella
+// de idempotencia son internas: no viajan.
 ticketSchema.set("toJSON", {
-  transform: (_doc, ret) => ({ ...ret, faltante: faltanteDe(ret) }),
+  transform: (_doc, ret) => {
+    const { claveIdempotencia: _clave, huellaIdempotencia: _huella, ...visible } = ret;
+    return { ...visible, faltante: faltanteDe(visible) };
+  },
 });
 
 ticketSchema.index({ factura: 1, fecha: 1 });
 ticketSchema.index({ cliente: 1, fecha: -1 });
 // Para las métricas de qué especie se vende más.
-ticketSchema.index({ administrador: 1, "items.especie": 1, fecha: -1 });
+ticketSchema.index({ marca: 1, "items.especie": 1, fecha: -1 });
+// Idempotencia del alta. Parcial para que los tickets sin clave (viejos, o
+// cargados por curl) no choquen entre sí.
+ticketSchema.index(
+  { marca: 1, claveIdempotencia: 1 },
+  { unique: true, partialFilterExpression: { claveIdempotencia: { $type: "string" } } }
+);
 
 export default mongoose.model<TicketAtributos>("Ticket", ticketSchema);
