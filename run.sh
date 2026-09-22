@@ -104,7 +104,11 @@ ok "typescript@$TS_VER + ${#DEV_DEPS[@]} devDependencies (tipos y tsx)"
 step "3) Variables de entorno (.env)"
 
 if [[ ! -f .env ]]; then
-  if [[ -f .env.example ]]; then
+  # En Render (o cualquier otro host) las variables ya vienen inyectadas
+  # directo al proceso — no hace falta un archivo .env físico.
+  if [[ -n "${MONGO_URI:-}" && -n "${JWT_SECRET:-}" && -n "${SUPER_ADMIN_EMAIL:-}" && -n "${SUPER_ADMIN_PASSWORD:-}" ]]; then
+    ok "No hay archivo .env, pero las variables ya están en el entorno (Render u otro host)"
+  elif [[ -f .env.example ]]; then
     cp .env.example .env
     warn "No existía .env — lo creé a partir de .env.example"
     info "Editá .env y completá los valores reales antes de volver a correr ./run.sh"
@@ -112,8 +116,9 @@ if [[ ! -f .env ]]; then
   else
     die "No existe .env ni .env.example. Creá un .env con: ${REQUIRED_VARS[*]}"
   fi
+else
+  ok ".env encontrado ($(realpath .env))"
 fi
-ok ".env encontrado ($(realpath .env))"
 
 # Carga y valida las variables con el mismo dotenv que usa la app.
 ENV_REPORT="$(node --input-type=module -e '
