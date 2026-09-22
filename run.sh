@@ -85,7 +85,9 @@ done
 if (( ${#MISSING_DEPS[@]} > 0 )); then
   warn "Faltan dependencias: ${MISSING_DEPS[*]}"
   info "Ejecutando npm install…"
-  npm install --no-fund --no-audit || die "npm install falló."
+  # --include=dev explícito: con NODE_ENV=production npm se saltea las
+  # devDependencies, y sin typescript no hay tsc que compile src/ → dist/.
+  npm install --no-fund --no-audit --include=dev || die "npm install falló."
   for dep in "${MISSING_DEPS[@]}"; do
     [[ -d "node_modules/$dep" ]] || die "La dependencia '$dep' sigue sin instalarse."
   done
