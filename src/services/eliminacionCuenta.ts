@@ -6,6 +6,7 @@ import Ticket from "../models/Ticket.js";
 import Pago from "../models/Pago.js";
 import Producto from "../models/Producto.js";
 import Especie from "../models/Especie.js";
+import Dispositivo from "../models/Dispositivo.js";
 import { eliminarImagen, publicIdLogo } from "./cloudinary.js";
 import { AppError } from "../utils/AppError.js";
 import { logger } from "../utils/logger.js";
@@ -35,6 +36,10 @@ export async function eliminarCuenta(usuario: UsuarioDocument): Promise<Resultad
 
   const usuarioId = usuario._id;
   const marcaId = usuario.marca;
+
+  // Sus teléfonos dejan de estar asociados a la cuenta. La app puede seguir
+  // instalada: queda anónima y sigue recibiendo los avisos generales.
+  await Dispositivo.updateMany({ usuario: usuarioId }, { $unset: { usuario: "" } });
 
   if (!marcaId) {
     await Usuario.deleteOne({ _id: usuarioId });

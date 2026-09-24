@@ -11,7 +11,7 @@ import { EMAIL_VALIDO, normalizarDni } from "../utils/validaciones.js";
 import { pendienteDe, type Pendiente } from "../middleware/marca.js";
 import { marcaConDuenos } from "../services/marcas.js";
 import { ROL_POR_DEFECTO } from "../config/roles.js";
-import { requireAuth } from "../middleware/auth.js";
+import { exigirNoSuspendida, requireAuth } from "../middleware/auth.js";
 import {
   rateLimit,
   limpiarRateLimit,
@@ -63,11 +63,16 @@ function firmarToken(usuario: UsuarioDocument): string {
   });
 }
 
-const respuestaSesion = (usuario: UsuarioDocument): RespuestaSesion => ({
-  token: firmarToken(usuario),
-  usuario: usuario.toJSON(),
-  pendiente: pendienteDe(usuario),
-});
+// Toda sesión nueva (registro, login, Google, reseteo) sale de acá: una
+// cuenta suspendida por el super_admin no recibe token por ningún camino.
+function respuestaSesion(usuario: UsuarioDocument): RespuestaSesion {
+  exigirNoSuspendida(usuario);
+  return {
+    token: firmarToken(usuario),
+    usuario: usuario.toJSON(),
+    pendiente: pendienteDe(usuario),
+  };
+}
 
 // Hash de una contraseña que nadie conoce (K14). Cuando el email no existe o
 // la cuenta no tiene contraseña (entra con Google), el login compara contra

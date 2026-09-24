@@ -7,9 +7,11 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { errorDeCampo } from "../utils/AppError.js";
 import { logger, redactar } from "../utils/logger.js";
 import { configVersion } from "../utils/version.js";
+import { avisosParaLaApp, registrarDispositivo } from "../services/avisos.js";
 
 // Rutas que usa la app para hablar de sí misma, no del negocio: qué versión
-// mínima hace falta (K8) y el reporte de sus errores (K12). Son públicas y el
+// mínima hace falta (K8), el reporte de sus errores (K12), y el registro del
+// teléfono y la lista de avisos del super_admin (doc/NOTIFICACIONES.md). Son públicas y el
 // chequeo de versión no las bloquea: una app vieja tiene que poder enterarse
 // de que está vieja y reportar por qué se rompió.
 
@@ -131,6 +133,36 @@ router.post(
     );
 
     res.status(202).json({ recibido: true });
+  })
+);
+
+// ───────────────────────── Notificaciones ─────────────────────────
+
+// POST /app/dispositivos   { token, plataforma? }
+//
+// La app registra su token de Expo al abrir, al iniciar sesión y al cerrarla.
+// Sin sesión (o con una vencida) el teléfono queda anónimo y recibe los avisos
+// igual: son para todo el que tenga la app. Nunca responde 401.
+router.post(
+  "/dispositivos",
+  rateLimit({ nombre: "dispositivos", maximo: 60, ventanaMs: 15 * 60 * 1000 }),
+  autenticacionOpcional,
+  asyncHandler(async (req, res) => {
+    res.json(
+      await registrarDispositivo(req.body, req.usuario, {
+        version: req.get("X-App-Version")?.trim(),
+        plataforma: req.get("X-App-Plataforma")?.trim(),
+      })
+    );
+  })
+);
+
+// GET /app/avisos — los últimos avisos del super_admin. Pública: la abre el
+// que tocó la notificación aunque no haya iniciado sesión.
+router.get(
+  "/avisos",
+  asyncHandler(async (_req, res) => {
+    res.set("Cache-Control", "public, max-age=60").json(await avisosParaLaApp());
   })
 );
 
