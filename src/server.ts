@@ -13,6 +13,7 @@ import { asyncHandler } from "./utils/asyncHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 import { exigirVersionMinima } from "./middleware/versionApp.js";
+import { detenerAvisos, iniciarAvisos } from "./services/avisos.js";
 
 import authRouter from "./routes/auth.js";
 import usuariosRouter from "./routes/usuarios.js";
@@ -28,6 +29,7 @@ import metricasRouter from "./routes/metricas.js";
 import legalRouter from "./routes/legal.js";
 import appRouter from "./routes/app.js";
 import cuentaRouter from "./routes/cuenta.js";
+import adminRouter from "./routes/admin.js";
 
 // Antes que nada: en producción, con un secreto de ejemplo o una variable que
 // falta, el server no arranca (ver config/entorno.ts).
@@ -95,6 +97,8 @@ app.use("/productos", productosRouter);
 app.use("/especies", especiesRouter);
 app.use("/facturas", facturasRouter);
 app.use("/metricas", metricasRouter);
+// El panel del super_admin (ver doc/SUPER_ADMIN.md).
+app.use("/admin", adminRouter);
 // Documentos legales públicos: Play Console y la app pueden consultarlos sin login.
 app.use("/legal", legalRouter);
 // Sin login: los links que el cliente abre desde WhatsApp.
@@ -157,8 +161,10 @@ function registrarApagado(server: Server): void {
 
     server.close((error) => {
       clearTimeout(corte);
-      mongoose
-        .disconnect()
+      // El aviso que se está mandando termina su lote y queda para el próximo
+      // arranque (ver services/avisos.ts), antes de cerrar Mongo.
+      detenerAvisos()
+        .then(() => mongoose.disconnect())
         .catch((e: unknown) => logger.error(e))
         .finally(() => process.exit(error ? 1 : 0));
     });
@@ -190,6 +196,7 @@ connectDB()
   .then(async () => {
     await crearSuperAdminInicial();
     await verificarEmail();
+    await iniciarAvisos();
 
     const server = app.listen(PORT, () => {
       logger.success(`Servidor corriendo en http://localhost:${PORT}`);

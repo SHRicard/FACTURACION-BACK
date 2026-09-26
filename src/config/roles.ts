@@ -24,7 +24,7 @@ export const ROL_POR_DEFECTO = "administrador" satisfies Rol;
 /** Qué puede hacer cada rol. Es la referencia, no se evalúa en runtime. */
 export const DESCRIPCION_ROLES: Record<Rol, string> = {
   super_admin:
-    "Administra la plataforma. Único que entra a /usuarios para crear y borrar cuentas. " +
+    "Administra y monitorea la plataforma, y manda los avisos a todos. Único que entra a /admin (y a /usuarios). " +
     "Se crea solo al arrancar el servidor, desde SUPER_ADMIN_EMAIL.",
   administrador:
     "Dueño de un negocio. Gestiona sus propios clientes, productos y movimientos. " +

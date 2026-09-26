@@ -10,7 +10,9 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "copy-assets": "node --eval \"require('fs').cpSync('src/emails/assets','dist/emails/assets',{recursive:true})\""
+    "copy-assets": "node --eval \"require('fs').cpSync('src/emails/assets','dist/emails/assets',{recursive:true})\"",
+    "sembrar:demo": "tsx scripts/sembrar-demo.ts",
+    "limpiar:demo": "tsx scripts/sembrar-demo.ts --limpiar"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

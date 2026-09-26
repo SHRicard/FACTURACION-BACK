@@ -1,7 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import Usuario from "../models/Usuario.js";
-import { noAutorizado, prohibido } from "../utils/AppError.js";
+import Usuario, { type UsuarioDocument } from "../models/Usuario.js";
+import { AppError, noAutorizado, prohibido } from "../utils/AppError.js";
+import { logger } from "../utils/logger.js";
 import type { RequestAutenticado } from "../types/index.js";
 import type { Rol } from "../config/roles.js";
 
@@ -9,6 +10,41 @@ import type { Rol } from "../config/roles.js";
 export interface PayloadToken extends jwt.JwtPayload {
   id: string;
   rol: string;
+}
+
+/**
+ * Corta a una cuenta suspendida por el super_admin. 403 y no 401: el front
+ * cierra la sesión igual, pero con `codigo` puede mostrar por qué en vez de
+ * mandar al login como si el token hubiera vencido.
+ */
+export function exigirNoSuspendida(usuario: Pick<UsuarioDocument, "suspendida" | "motivoSuspension">): void {
+  if (!usuario.suspendida) return;
+  throw new AppError(
+    "Tu cuenta está suspendida. Escribinos si creés que es un error.",
+    403,
+    usuario.motivoSuspension ? { motivo: usuario.motivoSuspension } : undefined,
+    "CUENTA_SUSPENDIDA"
+  );
+}
+
+// Cada cuánto se guarda el último acceso: no vale una escritura por request.
+const MS_ENTRE_ACCESOS = 5 * 60 * 1000;
+
+/**
+ * Deja anotado el último acceso y la versión de la app, para el monitoreo del
+ * super_admin. Sin await: si falla, se loguea y la request sigue.
+ */
+function registrarAcceso(usuario: UsuarioDocument, req: Request): void {
+  const version = req.get("X-App-Version")?.trim().slice(0, 20) || undefined;
+  const ahora = Date.now();
+  const reciente =
+    usuario.ultimoAcceso !== undefined &&
+    ahora - usuario.ultimoAcceso.getTime() < MS_ENTRE_ACCESOS;
+  if (reciente && (!version || version === usuario.ultimaVersionApp)) return;
+
+  const $set: { ultimoAcceso: Date; ultimaVersionApp?: string } = { ultimoAcceso: new Date(ahora) };
+  if (version) $set.ultimaVersionApp = version;
+  Usuario.updateOne({ _id: usuario._id }, { $set }).catch((error: unknown) => logger.error(error));
 }
 
 // Verifica el token JWT y carga req.usuario
@@ -39,7 +75,9 @@ export async function requireAuth(
     if (payload.iat !== undefined && usuario.passwordCambioDespuesDelToken(payload.iat)) {
       throw noAutorizado("Tu contraseña cambió, iniciá sesión de nuevo");
     }
+    exigirNoSuspendida(usuario);
 
+    registrarAcceso(usuario, req);
     req.usuario = usuario;
     next();
   } catch (error) {
@@ -74,6 +112,7 @@ export async function autenticacionOpcional(
       const usuario = await Usuario.findById(payload.id).select("+passwordCambiadoEn");
       const sigueValiendo =
         usuario !== null &&
+        !usuario.suspendida &&
         (payload.iat === undefined || !usuario.passwordCambioDespuesDelToken(payload.iat));
 
       if (usuario && sigueValiendo) req.usuario = usuario;

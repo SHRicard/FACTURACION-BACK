@@ -59,6 +59,18 @@ export interface UsuarioAtributos {
   // emitidos antes: si cambiaste la contraseña, las sesiones viejas se caen.
   passwordCambiadoEn?: Date;
 
+  // --- Monitoreo (lo ve el super_admin) ---
+  /** Última request autenticada. Se actualiza como mucho cada 5 minutos. */
+  ultimoAcceso?: Date;
+  /** La versión de la app (header X-App-Version) de ese último acceso. */
+  ultimaVersionApp?: string;
+
+  // --- Suspensión (la decide el super_admin) ---
+  /** Suspendida no puede iniciar sesión y sus tokens dejan de valer. */
+  suspendida: boolean;
+  suspendidaEl?: Date;
+  motivoSuspension?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -119,6 +131,13 @@ const usuarioSchema = new Schema<
     resetPasswordToken: { type: String, select: false },
     resetPasswordExpira: { type: Date, select: false },
     passwordCambiadoEn: { type: Date, select: false },
+
+    ultimoAcceso: { type: Date },
+    ultimaVersionApp: { type: String },
+
+    suspendida: { type: Boolean, default: false },
+    suspendidaEl: { type: Date },
+    motivoSuspension: { type: String, trim: true, maxlength: 300 },
   },
   { timestamps: true },
 );
@@ -131,6 +150,8 @@ usuarioSchema.index(
 );
 // Los dueños de una marca (el virtual `duenos` de Marca busca por acá).
 usuarioSchema.index({ marca: 1 });
+// Los listados del super_admin: "activos en los últimos N días".
+usuarioSchema.index({ ultimoAcceso: -1 });
 
 // Hashea el password antes de guardar, solo si cambió
 usuarioSchema.pre("save", async function (next) {
