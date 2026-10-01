@@ -5,11 +5,27 @@ import Ticket from "../models/Ticket.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireMarca } from "../middleware/marca.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { datosInvalidos, noEncontrado } from "../utils/AppError.js";
+import { datosInvalidos, errorDeCampo, noEncontrado } from "../utils/AppError.js";
 import type { RequestConMarca } from "../types/index.js";
 
 const router = Router();
 router.use(requireAuth, requireMarca);
+
+/**
+ * La cantidad es opcional. `undefined` es que no vino (el PUT no la toca) y
+ * `null` que vino vacía (el PUT la borra). Si vino, es un entero desde 0; el
+ * "100" que manda un input también sirve.
+ */
+function leerCantidad(crudo: unknown): number | null | undefined {
+  if (crudo === undefined) return undefined;
+  if (crudo === null || (typeof crudo === "string" && !crudo.trim())) return null;
+
+  const cantidad = typeof crudo === "number" || typeof crudo === "string" ? Number(crudo) : NaN;
+  if (!Number.isInteger(cantidad) || cantidad < 0) {
+    throw errorDeCampo("cantidad", "La cantidad tiene que ser un número entero, de 0 para arriba");
+  }
+  return cantidad;
+}
 
 // Los tipos de mercadería de la marca: Pantalón, Pantalón corto, Zapatilla.
 router.get(
@@ -26,6 +42,7 @@ router.post(
     const especie = await Especie.create({
       nombre: req.body?.nombre,
       descripcion: req.body?.descripcion,
+      cantidad: leerCantidad(req.body?.cantidad) ?? undefined,
       marca: req.marca._id,
     });
     res.status(201).json(especie);
@@ -36,9 +53,14 @@ router.put(
   "/:id",
   asyncHandler<RequestConMarca>(async (req, res) => {
     const { nombre, descripcion, activo } = req.body ?? {};
+    const cantidad = leerCantidad(req.body?.cantidad);
+
+    // Vaciarla borra la clave: queda igual que una especie que nunca la tuvo.
     const especie = await Especie.findOneAndUpdate(
       { _id: req.params["id"], marca: req.marca._id },
-      { nombre, descripcion, activo },
+      cantidad === null
+        ? { nombre, descripcion, activo, $unset: { cantidad: 1 } }
+        : { nombre, descripcion, activo, cantidad },
       { new: true, runValidators: true }
     );
     if (!especie) throw noEncontrado("Especie", "a");
