@@ -14,6 +14,11 @@ import mongoose, { Schema, type HydratedDocument, type Types } from "mongoose";
 export interface EspecieAtributos {
   nombre: string;
   descripcion?: string;
+  /**
+   * Cuántas unidades hay, si la marca quiere anotarlo. Es un dato a mano: los
+   * tickets no la descuentan ni la consultan, así que nunca frena una venta.
+   */
+  cantidad?: number;
   /** Se desactiva en vez de borrarse: los tickets viejos la siguen nombrando. */
   activo: boolean;
   marca: Types.ObjectId;
@@ -27,6 +32,7 @@ const especieSchema = new Schema<EspecieAtributos>(
   {
     nombre: { type: String, required: true, trim: true },
     descripcion: { type: String, trim: true },
+    cantidad: { type: Number, min: 0 },
     activo: { type: Boolean, default: true },
     marca: { type: Schema.Types.ObjectId, ref: "Marca", required: true },
   },

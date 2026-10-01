@@ -22,6 +22,12 @@ export interface ItemTicket {
   subtotal: number;
 }
 
+/** Cuánto le restó el ticket a la cantidad de una especie. */
+export interface DescuentoEspecie {
+  especie: Types.ObjectId;
+  cantidad: number;
+}
+
 export interface TicketAtributos {
   /** A qué factura se pegó. Siempre la que estaba abierta al cargarlo. */
   factura: Types.ObjectId;
@@ -40,6 +46,16 @@ export interface TicketAtributos {
   pagado: number;
 
   registradoPor?: Types.ObjectId;
+
+  /**
+   * Lo que este ticket le descontó de verdad a cada especie. No siempre es lo
+   * que se llevó: la cantidad no baja de 0, así que si había 2 y se llevó 3 se
+   * descontaron 2. Es lo que se devuelve al corregir o anular el ticket.
+   *
+   * Ausente en los tickets de antes de que la especie tuviera cantidad: esos
+   * no la descontaron, y corregirlos o anularlos tampoco la toca.
+   */
+  descontado?: DescuentoEspecie[];
 
   /**
    * Baja lógica. El ticket cargado por error no se borra: se tacha.
@@ -97,6 +113,14 @@ const itemSchema = new Schema<ItemTicket>(
   { _id: false }
 );
 
+const descuentoSchema = new Schema<DescuentoEspecie>(
+  {
+    especie: { type: Schema.Types.ObjectId, ref: "Especie", required: true },
+    cantidad: { type: Number, required: true, min: 1 },
+  },
+  { _id: false }
+);
+
 const ticketSchema = new Schema<TicketAtributos>(
   {
     factura: { type: Schema.Types.ObjectId, ref: "Factura", required: true },
@@ -110,6 +134,9 @@ const ticketSchema = new Schema<TicketAtributos>(
     pagado: { type: Number, default: 0, min: 0 },
 
     registradoPor: { type: Schema.Types.ObjectId, ref: "Usuario" },
+    // Sin default: un array vacío diría "no descontó nada" en un ticket viejo
+    // que en realidad nunca pasó por el descuento.
+    descontado: { type: [descuentoSchema], default: undefined },
 
     anulado: { type: Boolean, default: false },
     anuladoEl: { type: Date },
@@ -122,10 +149,15 @@ const ticketSchema = new Schema<TicketAtributos>(
 );
 
 // El front necesita el faltante sin tener que restarlo. La clave y la huella
-// de idempotencia son internas: no viajan.
+// de idempotencia, y lo descontado a las especies, son internos: no viajan.
 ticketSchema.set("toJSON", {
   transform: (_doc, ret) => {
-    const { claveIdempotencia: _clave, huellaIdempotencia: _huella, ...visible } = ret;
+    const {
+      claveIdempotencia: _clave,
+      huellaIdempotencia: _huella,
+      descontado: _descontado,
+      ...visible
+    } = ret;
     return { ...visible, faltante: faltanteDe(visible) };
   },
 });

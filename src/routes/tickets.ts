@@ -18,6 +18,7 @@ import {
   serializarFactura,
 } from "../services/facturacion.js";
 import { generarPdfFactura } from "../services/pdfFactura.js";
+import { descontarCantidades, devolverCantidades } from "../services/cantidadEspecies.js";
 import { enviarPdf } from "../utils/respuestaPdf.js";
 import type { RequestConMarca } from "../types/index.js";
 
@@ -237,6 +238,9 @@ router.get(
 // `venceEl` (aaaa-mm-dd, opcional) es la fecha que acordó con el cliente. Vale
 // solo en el primer ticket de la factura, que es cuando se fija; sin eso, sale
 // de su ventana de pago. Para cambiarla después: PUT /facturas/:id/vencimiento.
+//
+// Lo que se lleva se descuenta de la cantidad de cada especie, sin bajarla de
+// 0 y sin frenar nunca la venta (ver services/cantidadEspecies.ts).
 router.post(
   "/clientes/:id/tickets",
   conMarca,
@@ -260,9 +264,16 @@ router.post(
       items,
       total,
       pagado,
+      descontado: [],
       // Con varios dueños, esto dice cuál de todos lo cargó.
       registradoPor: req.usuario._id,
     });
+
+    // Recién con el ticket guardado: si el alta falla (o es un reintento que
+    // choca con uno ya cargado), la especie no pierde unidades por una venta
+    // que no se registró.
+    ticket.descontado = await descontarCantidades(items, req.marca._id);
+    await ticket.save();
 
     const actualizada = await recalcularFactura(factura._id);
 
@@ -306,6 +317,14 @@ router.put(
     // más de lo que se llevó.
     const pagado = leerPagado(req.body?.pagado ?? ticket.pagado, total);
 
+    // Las especies quedan como si el ticket se hubiera cargado bien de entrada:
+    // vuelve lo que descontó la versión vieja y se descuenta la nueva. Los
+    // tickets de antes de la cantidad no la descontaron, y no la tocan ahora.
+    if (ticket.descontado) {
+      await devolverCantidades(ticket.descontado, req.marca._id);
+      ticket.descontado = await descontarCantidades(items, req.marca._id);
+    }
+
     ticket.set({ items, total, pagado });
     await ticket.save();
 
@@ -339,6 +358,9 @@ router.delete(
     ticket.anuladoEl = new Date();
     if (req.body?.motivo) ticket.motivoAnulacion = String(req.body.motivo).trim();
     await ticket.save();
+
+    // La mercadería no salió: lo que se había descontado vuelve a la especie.
+    if (ticket.descontado) await devolverCantidades(ticket.descontado, req.marca._id);
 
     const actualizada = await ajustarEstadoPorSaldo(await recalcularFactura(ticket.factura));
 
